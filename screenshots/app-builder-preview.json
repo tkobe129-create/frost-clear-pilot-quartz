@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "权盾智检",
+      "hasCanvas": false,
+      "bodyTextLen": 429,
+      "bodyTextHash": "2faf0229addbe3f689f1a97ff4858c82fdeb0f72be59167bdf53345651f62bb8",
+      "bodyTextPrefix": "QUANDUN LAB 权盾智检 工作台 4 扫码 试剂 记录 检验科 · 试剂管家 工作台 检验科 今日库存态势 4 条预警待",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "权盾智检",
+      "hasCanvas": false,
+      "bodyTextLen": 421,
+      "bodyTextHash": "107d7bbc901943924c5c37152f8cb43698f239b0e24f1a554ad77b03202cc617",
+      "bodyTextPrefix": "QUANDUN LAB 权盾智检 · 试剂管家 检验科 今日库存态势 4 条预警待处理 一键下单 将按安全库存为 2 项缺货试剂",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}

@@ -1,0 +1,665 @@
+# 权盾智检 - 试剂管理系统核心代码
+
+## 一、Supabase 连接 (utils/supabase.js)
+
+```javascript
+/**
+ * Supabase 连接和初始化
+ */
+import { createClient } from '@supabase/supabase-js'
+
+const SUPABASE_URL = 'https://jtshtmhjplhapdwnulbk.supabase.co'
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp0c2h0bWhqcGxoYXBkd251bGJrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5NzYwMzUsImV4cCI6MjA5MzU1MjAzNX0.WfM2DIRstmsHQN5l7oQ51pHajBZ5a9TySKnV_hbtxEY'
+
+let supabase = null
+
+export function initSupabase() {
+  if (!supabase) {
+    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  }
+  return supabase
+}
+
+export function getSupabase() {
+  if (!supabase) return initSupabase()
+  return supabase
+}
+```
+
+---
+
+## 二、字段转换 (utils/fields.js)
+
+### 2.1 前端 → 数据库 (reagents 表)
+
+```javascript
+export function toDbFields(r) {
+  const expiry = r.expiryDate || r.expiry_date
+  const prod = r.productionDate || r.production_date
+  return {
+    code: r.code || '',
+    name: r.name || '',
+    category: r.category || '',
+    specification: r.specification || '',
+    manufacturer: r.manufacturer || '',
+    unit: r.unit || '',
+    stock_quantity: r.stockQuantity || r.stock_quantity || 0,
+    min_stock: r.minStock || r.min_stock || 0,
+    storage_condition: r.storageCondition || r.storage_condition || '',
+    location: r.location || '',
+    expiry_date: expiry || '',
+    registration_number: r.registrationNumber || r.registration_number || '',
+    notes: r.notes || '',
+    scan_rule: r.scanRule || r.scan_rule || '',
+    scan_segments: r.scanSegments || r.scan_segments || [],
+    lot_number: r.lotNumber || '',
+    production_date: prod || '',
+    raw_barcode: r.rawBarcode || ''
+  }
+}
+```
+
+### 2.2 数据库 → 前端 (reagents 表)
+
+```javascript
+export function fromDbFields(r) {
+  return {
+    id: r.id,
+    code: r.code || '',
+    name: r.name || '',
+    category: r.category || '',
+    specification: r.specification || '',
+    manufacturer: r.manufacturer || '',
+    unit: r.unit || '',
+    stockQuantity: r.stock_quantity || 0,
+    minStock: r.min_stock || 0,
+    storageCondition: r.storage_condition || '',
+    location: r.location || '',
+    expiryDate: r.expiry_date || '',
+    registrationNumber: r.registration_number || '',
+    notes: r.notes || '',
+    scanRule: r.scan_rule || '',
+    scanSegments: r.scan_segments || [],
+    lotNumber: r.lot_number || '',
+    productionDate: r.production_date || ''
+  }
+}
+```
+
+### 2.3 前端 → 数据库 (stock_records 表)
+
+```javascript
+export function toStockFields(r) {
+  return {
+    reagent_id: r.reagentId,
+    type: r.type,
+    quantity: r.quantity,
+    lot_number: r.lotNumber || '',
+    expiry_date: r.expiryDate || '',
+    production_date: r.productionDate || '',
+    note: r.note || '',
+    operator: r.operator || '',
+    department: r.department || '',
+    reason: r.reason || '',
+    created_at: r.createdAt || Date.now()
+  }
+}
+```
+
+### 2.4 数据库 → 前端 (stock_records 表)
+
+```javascript
+export function fromStockFields(r) {
+  return {
+    id: r.id,
+    reagentId: r.reagent_id,
+    type: r.type,
+    quantity: r.quantity,
+    lotNumber: r.lot_number || '',
+    expiryDate: r.expiry_date || '',
+    productionDate: r.production_date || '',
+    note: r.note || '',
+    operator: r.operator || '',
+    department: r.department || '',
+    reason: r.reason || '',
+    createdAt: r.created_at
+  }
+}
+```
+
+---
+
+## 三、数据库操作封装 (utils/db.js)
+
+```javascript
+import { getSupabase } from './supabase.js'
+import { toDbFields, fromDbFields, toStockFields, fromStockFields } from './fields.js'
+
+// 新增记录
+export async function dbAdd(storeName, data) {
+  const sb = getSupabase()
+  let fields
+
+  if (storeName === 'reagents') {
+    fields = toDbFields(data)
+  } else if (storeName === 'stockRecords') {
+    fields = toStockFields(data)
+  } else {
+    fields = data
+  }
+
+  const { data: result, error } = await sb.from(storeName).insert(fields).select().single()
+  if (error) throw error
+
+  if (storeName === 'reagents') return fromDbFields(result)
+  if (storeName === 'stockRecords') return fromStockFields(result)
+  return result
+}
+
+// 更新记录
+export async function dbPut(storeName, data) {
+  const sb = getSupabase()
+  let fields
+
+  if (storeName === 'reagents') {
+    fields = toDbFields(data)
+  } else if (storeName === 'stockRecords') {
+    fields = toStockFields(data)
+  } else {
+    fields = data
+  }
+
+  const { data: result, error } = await sb.from(storeName).update(fields).eq('id', data.id).select().single()
+  if (error) throw error
+
+  if (storeName === 'reagents') return fromDbFields(result)
+  if (storeName === 'stockRecords') return fromStockFields(result)
+  return result
+}
+
+// 获取单条记录
+export async function dbGet(storeName, id) {
+  const sb = getSupabase()
+  const { data, error } = await sb.from(storeName).select('*').eq('id', id).single()
+  if (error) throw error
+
+  if (storeName === 'reagents') return fromDbFields(data)
+  if (storeName === 'stockRecords') return fromStockFields(data)
+  return data
+}
+
+// 获取所有记录
+export async function dbGetAll(storeName) {
+  const sb = getSupabase()
+  const { data, error } = await sb.from(storeName).select('*').order('id', { ascending: true })
+  if (error) throw error
+
+  if (storeName === 'reagents') return data.map(fromDbFields)
+  if (storeName === 'stockRecords') return data.map(fromStockFields)
+  return data
+}
+
+// 删除记录
+export async function dbDelete(storeName, id) {
+  const sb = getSupabase()
+  const { error } = await sb.from(storeName).delete().eq('id', id)
+  if (error) throw error
+}
+```
+
+---
+
+## 四、扫码匹配逻辑 (utils/scanner.js)
+
+### 4.1 AI 描述映射表
+
+```javascript
+export const AI_DESC = {
+  '01': 'GTIN',
+  '10': '批号',
+  '11': '生产日期',
+  '17': '有效期至',
+  '21': '序列号',
+  '37': '数量',
+  '240': '附加产品标识',
+  '241': '客户方代码',
+  '410': '发货方',
+  '411': '收货方',
+  '414': '标识码',
+  '417': '供货方',
+  '420': '收货方名称'
+}
+```
+
+### 4.2 GS1 AI 映射表
+
+```javascript
+export const GS1_AI_MAP = {
+  '01': { desc: 'GTIN', len: 14, color: 'seg-01' },
+  '10': { desc: '批号', len: 0, color: 'seg-10' },
+  '11': { desc: '生产日期', len: 6, color: 'seg-11' },
+  '12': { desc: '有效期', len: 6, color: 'seg-12' },
+  '13': { desc: '包装日期', len: 6, color: 'seg-13' },
+  '15': { desc: '保质期', len: 6, color: 'seg-15' },
+  '17': { desc: '有效期至', len: 6, color: 'seg-17' },
+  '20': { desc: '产品变体', len: 2, color: 'seg-20' },
+  '21': { desc: '序列号', len: 0, color: 'seg-21' },
+  '22': { desc: 'HIBCC', len: 0, color: 'seg-22' },
+  '240': { desc: '附加产品标识', len: 0, color: 'seg-240' },
+  '241': { desc: '客户部件号', len: 0, color: 'seg-241' },
+  '250': { desc: '二级序列号', len: 0, color: 'seg-250' },
+  '251': { desc: '引用源实体', len: 0, color: 'seg-251' },
+  '30': { desc: '可变数量', len: 0, color: 'seg-30' },
+  '310': { desc: '净重(kg)', len: 6, color: 'seg-310' },
+  '311': { desc: '净长(m)', len: 6, color: 'seg-311' },
+  '312': { desc: '净宽(m)', len: 6, color: 'seg-312' },
+  '313': { desc: '净高(m)', len: 6, color: 'seg-313' },
+  '314': { desc: '净面积(m2)', len: 6, color: 'seg-314' },
+  '315': { desc: '净体积(L)', len: 6, color: 'seg-315' },
+  '316': { desc: '净体积(m3)', len: 6, color: 'seg-316' }
+}
+```
+
+### 4.3 清理 FNC1 字符
+
+```javascript
+export function cleanFNC1(code) {
+  return code
+    .replace(/[\x1D]D/g, '')
+    .replace(/[\x1D\]d]/gi, '')
+    .replace(/\x1D/g, '')
+}
+```
+
+### 4.4 解析条码（GS1 格式）
+
+```javascript
+/**
+ * 格式: (AI)(data)(AI)(data)...
+ * 示例输入: (01)(06954414719413)(11)(251206)(17)(270606)(10)(AB25100721H000502)
+ */
+export function parseBarcode(raw) {
+  if (!raw || !raw.trim()) return []
+
+  const parsedSegments = []
+  const regex = /\((\d+)\)([^\(]*)/g
+  let match
+
+  while ((match = regex.exec(raw)) !== null) {
+    const ai = match[1]
+    const data = match[2]
+    const start = match.index
+    const end = start + match[0].length
+    const info = GS1_AI_MAP[ai] || { desc: '未知(' + ai + ')', len: 0, color: 'seg-other' }
+    parsedSegments.push({
+      ai,
+      desc: info.desc,
+      color: info.color,
+      start,
+      end,
+      value: data,
+      fullMatch: match[0]
+    })
+  }
+
+  if (parsedSegments.length === 0) {
+    parsedSegments.push({
+      ai: '',
+      desc: '完整条码',
+      color: 'seg-other',
+      start: 0,
+      end: raw.length,
+      value: raw,
+      fullMatch: raw
+    })
+  }
+
+  return parsedSegments
+}
+```
+
+### 4.5 根据切割规则提取字段
+
+```javascript
+/**
+ * 从扫码结果中按预设规则提取批号、日期等
+ * @param {string} scanResult - 扫码结果
+ * @param {string} scanSegmentsStr - 切割规则 JSON
+ * @returns {object} { lotNumber, productionDate, productionDateFormatted, expiryDate, expiryDateFormatted, gtin, serialNumber }
+ */
+export function extractFieldsByRules(scanResult, scanSegmentsStr) {
+  if (!scanSegmentsStr) return {}
+  try {
+    const rules = JSON.parse(scanSegmentsStr)
+    const fields = {}
+    for (const rule of rules) {
+      const value = scanResult.substring(rule.start, rule.start + rule.len)
+      switch (rule.ai) {
+        case '01':
+          fields.gtin = value
+          break
+        case '10':
+          fields.lotNumber = value
+          break
+        case '11':
+          fields.productionDate = value
+          if (value.length === 6) {
+            fields.productionDateFormatted = '20' + value.substring(0, 2) + '-' + value.substring(2, 4) + '-' + value.substring(4, 6)
+          }
+          break
+        case '17':
+          fields.expiryDate = value
+          if (value.length === 6) {
+            fields.expiryDateFormatted = '20' + value.substring(0, 2) + '-' + value.substring(2, 4) + '-' + value.substring(4, 6)
+          }
+          break
+        case '21':
+          fields.serialNumber = value
+          break
+      }
+    }
+    return fields
+  } catch (e) {
+    return {}
+  }
+}
+```
+
+### 4.6 扫码匹配试剂（三级优先级）
+
+```javascript
+/**
+ * 匹配优先级:
+ *   1. scanRule 包含匹配（有GS1切割规则）
+ *   2. code (GTIN) 包含匹配（有切割规则）
+ *   3. 简单条码匹配（无切割规则，手动输入批号/效期）
+ *
+ * @param {string} scanResult - 扫码结果
+ * @returns {object|null} { reagent, fields }
+ */
+export async function matchReagentByScan(scanResult) {
+  const reagents = await dbGetAll('reagents')
+
+  // 优先级 1: 通过 scanRule 匹配
+  const withRule = reagents.filter(r => r.scanRule && r.scanRule.trim())
+  for (const r of withRule) {
+    if (scanResult.includes(r.scanRule)) {
+      const fields = extractFieldsByRules(scanResult, r.scanSegments)
+      return { reagent: r, fields }
+    }
+  }
+
+  // 优先级 2: 通过 code (GTIN) 匹配
+  const withCode = reagents.filter(r => r.code && r.code.trim())
+  for (const r of withCode) {
+    if (scanResult.includes(r.code)) {
+      const fields = extractFieldsByRules(scanResult, r.scanSegments)
+      return { reagent: r, fields }
+    }
+  }
+
+  // 优先级 3: 简单条码匹配（无 GS1 结构）
+  const simpleMatch = reagents.filter(r => r.code && r.code.trim() && !r.scanSegments)
+  for (const r of simpleMatch) {
+    if (scanResult === r.code || scanResult.includes(r.code)) {
+      return { reagent: r, fields: {} }
+    }
+  }
+
+  return null
+}
+```
+
+---
+
+## 五、扫码入库/出库核心逻辑 (pages/stock/index.vue)
+
+### 5.1 扫码处理
+
+```javascript
+async function onScan(code) {
+  scanning.value = true
+  try {
+    const cleaned = cleanFNC1(code)
+    const result = await matchReagentByScan(cleaned)
+    if (result) {
+      matchedReagent.value = result.reagent
+      extractedFields.value = result.fields
+      // 自动填充提取的字段
+      if (result.fields.lotNumber) form.value.lotNumber = result.fields.lotNumber
+      if (result.fields.expiryDateFormatted) form.value.expiryDate = result.fields.expiryDateFormatted
+      if (result.fields.productionDateFormatted) form.value.productionDate = result.fields.productionDateFormatted
+      uni.showToast({ title: '匹配成功', icon: 'success' })
+    } else {
+      matchedReagent.value = null
+      extractedFields.value = {}
+      uni.showToast({ title: '未找到匹配试剂', icon: 'none' })
+    }
+  } catch (err) {
+    uni.showToast({ title: '匹配失败', icon: 'none' })
+  } finally {
+    scanning.value = false
+  }
+}
+```
+
+### 5.2 添加到待提交列表
+
+```javascript
+function addToPending() {
+  if (!matchedReagent.value) {
+    uni.showToast({ title: '请先选择试剂', icon: 'none' })
+    return
+  }
+  if (!form.value.quantity || Number(form.value.quantity) <= 0) {
+    uni.showToast({ title: '请输入有效数量', icon: 'none' })
+    return
+  }
+
+  // 出库时检查库存
+  if (activeTab.value === 'out') {
+    const currentStock = matchedReagent.value.stockQuantity || 0
+    const alreadyPending = pendingList.value
+      .filter(p => p.reagentId === matchedReagent.value.id)
+      .reduce((sum, p) => sum + p.quantity, 0)
+    if (Number(form.value.quantity) > currentStock - alreadyPending) {
+      uni.showToast({ title: '出库数量超过可用库存', icon: 'none' })
+      return
+    }
+  }
+
+  pendingList.value.push({
+    reagentId: matchedReagent.value.id,
+    reagentName: matchedReagent.value.name,
+    quantity: Number(form.value.quantity),
+    lotNumber: form.value.lotNumber,
+    expiryDate: form.value.expiryDate,
+    productionDate: form.value.productionDate,
+    note: form.value.note
+  })
+
+  uni.showToast({ title: '已添加', icon: 'success' })
+  clearMatch()
+}
+```
+
+### 5.3 批量提交入库/出库
+
+```javascript
+async function batchSubmit() {
+  if (pendingList.value.length === 0) {
+    uni.showToast({ title: '没有待提交的记录', icon: 'none' })
+    return
+  }
+
+  try {
+    uni.showLoading({ title: '提交中...' })
+
+    for (const item of pendingList.value) {
+      // 写入出入库记录
+      await dbAdd('stockRecords', {
+        reagentId: item.reagentId,
+        type: activeTab.value,       // 'in' 或 'out'
+        quantity: item.quantity,
+        lotNumber: item.lotNumber,
+        expiryDate: item.expiryDate,
+        productionDate: item.productionDate,
+        note: item.note,
+        operator: '当前用户',
+        department: '检验科',
+        reason: ''
+      })
+
+      // 更新试剂库存
+      const reagent = reagentList.value.find(r => r.id === item.reagentId)
+      if (reagent) {
+        if (activeTab.value === 'in') {
+          reagent.stockQuantity = (reagent.stockQuantity || 0) + item.quantity
+        } else {
+          reagent.stockQuantity = Math.max(0, (reagent.stockQuantity || 0) - item.quantity)
+        }
+        await dbPut('reagents', reagent)
+      }
+    }
+
+    uni.showToast({ title: `成功提交${pendingList.value.length}条记录`, icon: 'success' })
+    pendingList.value = []
+    await loadReagents()
+    await loadHistory()
+  } catch (err) {
+    uni.showToast({ title: '提交失败', icon: 'none' })
+  } finally {
+    uni.hideLoading()
+  }
+}
+```
+
+---
+
+## 六、试剂预录核心逻辑 (pages/reagent/form.vue)
+
+### 6.1 扫码获取条码
+
+```javascript
+function startScan() {
+  // #ifdef MP-WEIXIN
+  uni.scanCode({
+    onlyFromCamera: false,
+    scanType: ['barCode', 'qrCode'],
+    success: (res) => {
+      barcodeRaw.value = res.result || ''
+      autoParseBarcode()
+    },
+    fail: () => {
+      uni.showToast({ title: '扫码失败', icon: 'none' })
+    }
+  })
+  // #endif
+}
+```
+
+### 6.2 自动解析条码生成切割规则
+
+```javascript
+function autoParseBarcode() {
+  if (!barcodeRaw.value.trim()) return
+  const segments = parseBarcode(barcodeRaw.value)
+  parsedSegments.value = segments
+
+  // 自动填充 scanRule（GTIN）
+  const gtinSeg = segments.find(s => s.ai === '01')
+  if (gtinSeg) {
+    form.value.scanRule = gtinSeg.value
+    form.value.code = form.value.code || gtinSeg.value
+  }
+
+  // 自动生成切割规则
+  const rules = segments.map(s => {
+    const dataStart = s.start + String(s.ai).length
+    return { ai: s.ai, desc: s.desc, start: dataStart, len: s.end - dataStart }
+  })
+  form.value.scanSegments = rules
+  scanSegmentsText.value = JSON.stringify(rules)
+}
+```
+
+### 6.3 保存试剂
+
+```javascript
+async function saveReagent() {
+  if (!form.value.code.trim()) {
+    uni.showToast({ title: '请输入GTIN码', icon: 'none' })
+    return
+  }
+  if (!form.value.name.trim()) {
+    uni.showToast({ title: '请输入试剂名称', icon: 'none' })
+    return
+  }
+
+  // 解析切割规则文本
+  if (scanSegmentsText.value.trim()) {
+    try {
+      form.value.scanSegments = JSON.parse(scanSegmentsText.value)
+    } catch {
+      uni.showToast({ title: '切割规则JSON格式错误', icon: 'none' })
+      return
+    }
+  }
+
+  try {
+    uni.showLoading({ title: '保存中...' })
+
+    if (isEdit.value) {
+      form.value.id = editId.value
+      await dbPut('reagents', form.value)
+      uni.showToast({ title: '更新成功', icon: 'success' })
+    } else {
+      await dbAdd('reagents', form.value)
+      uni.showToast({ title: '新增成功', icon: 'success' })
+    }
+
+    setTimeout(() => {
+      uni.navigateBack()
+    }, 1500)
+  } catch (err) {
+    uni.showToast({ title: '保存失败: ' + (err.message || ''), icon: 'none' })
+  } finally {
+    uni.hideLoading()
+  }
+}
+```
+
+---
+
+## 七、数据流向图
+
+```
+扫码枪/摄像头/粘贴
+       │
+       ▼
+  cleanFNC1() 清理特殊字符
+       │
+       ▼
+  matchReagentByScan() 三级匹配
+       │
+       ├── 优先级1: scanRule 包含匹配 → extractFieldsByRules() 自动提取
+       ├── 优先级2: code 包含匹配     → extractFieldsByRules() 自动提取
+       └── 优先级3: 简单条码匹配     → 返回空字段，手动输入
+       │
+       ▼
+  pendingList 添加到待提交列表
+       │
+       ▼
+  batchSubmit() 批量提交
+       │
+       ├── dbAdd('stockRecords', toStockFields(data))  写入出入库记录
+       └── dbPut('reagents', reagent)                  更新库存数量
+       │
+       ▼
+  Supabase PostgreSQL 数据库
+       │
+       ├── reagents 表（试剂信息）
+       ├── stock_records 表（出入库记录）
+       ├── settings 表（系统设置）
+       └── users 表（用户信息）
+```
