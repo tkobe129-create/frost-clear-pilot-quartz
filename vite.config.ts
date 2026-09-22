@@ -142,6 +142,9 @@ function authPopupPlugin(): Plugin {
   };
 }
 
+// Prefer Netlify preset when building on Netlify CI; keep Vercel for local/Grok builds.
+const nitroPreset = process.env.NETLIFY ? "netlify" : "vercel";
+
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
@@ -170,7 +173,7 @@ export default defineConfig(({ command, isPreview }) => ({
     ...(command === "build" || isPreview
       ? [
           nitro({
-            preset: "vercel",
+            preset: nitroPreset,
             // Auto-registers server/middleware/* (the PWA install page +
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.
