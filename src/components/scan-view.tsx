@@ -30,25 +30,72 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [flash, setFlash] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Keep latest pending & tab for continuous auto-add without stale closure
+  const pendingRef = useRef(pending);
+  const tabRef = useRef(tab);
+  pendingRef.current = pending;
+  tabRef.current = tab;
 
   const demos = useMemo(() => reagents.slice(0, 6), [reagents]);
 
-  function applyMatch(code: string) {
+  function applyMatch(code: string, options?: { continuous?: boolean }) {
     const cleaned = stripSymbologyId(code);
     if (!cleaned) return;
     setRaw(cleaned);
     const result = matchReagentByScan(cleaned, reagents);
     if (result) {
+      const lot = result.fields.lotNumber || result.reagent.lotNumber || "";
+      const exp = result.fields.expiryDateFormatted || result.reagent.expiryDate || "";
+      const prod = result.fields.productionDateFormatted || result.reagent.productionDate || "";
+
       setMatched(result.reagent);
       setFields(result.fields);
-      if (result.fields.lotNumber) setLotNumber(result.fields.lotNumber);
-      else setLotNumber(result.reagent.lotNumber || "");
-      if (result.fields.expiryDateFormatted) setExpiryDate(result.fields.expiryDateFormatted);
-      else setExpiryDate(result.reagent.expiryDate || "");
-      if (result.fields.productionDateFormatted) setProductionDate(result.fields.productionDateFormatted);
-      else setProductionDate(result.reagent.productionDate || "");
+      setLotNumber(lot);
+      setExpiryDate(exp);
+      setProductionDate(prod);
       setFlash(true);
       window.setTimeout(() => setFlash(false), 420);
+
+      // Continuous camera mode: auto-add qty=1 and clear form so next scan is ready
+      if (options?.continuous) {
+        const qty = 1;
+        if (tabRef.current === "out") {
+          const already = pendingRef.current
+            .filter((p) => p.reagentId === result.reagent.id)
+            .reduce((s, p) => s + p.quantity, 0);
+          if (qty > result.reagent.stockQuantity - already) {
+            toast.error(`出库数量超过可用库存 · ${result.reagent.name}`);
+            return;
+          }
+        }
+        setPending((list) => [
+          ...list,
+          {
+            key: `${result.reagent.id}-${Date.now()}`,
+            reagentId: result.reagent.id,
+            reagentName: result.reagent.name,
+            unit: result.reagent.unit,
+            quantity: qty,
+            lotNumber: lot,
+            expiryDate: exp,
+            productionDate: prod,
+            note: "",
+            stockQuantity: result.reagent.stockQuantity,
+          },
+        ]);
+        toast.success(`已加入 ${result.reagent.name} ×1，可继续扫码`);
+        // Clear form so UI is ready for next scan (camera stays open)
+        setMatched(null);
+        setFields({});
+        setRaw("");
+        setQuantity("1");
+        setLotNumber("");
+        setExpiryDate("");
+        setProductionDate("");
+        setNote("");
+        return;
+      }
+
       toast.success(`已匹配 ${result.reagent.name}`);
     } else {
       setMatched(null);
@@ -155,10 +202,10 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
         <section className={cn("rounded-xl border border-border bg-surface p-3 shadow-card sm:p-4", flash && "scan-flash")}>
           <Button className="h-12 w-full" onClick={() => setCameraOpen(true)}>
             <Camera className="size-4" />
-            打开摄像头扫码
+            打开摄像头连续扫码
           </Button>
           <p className="mt-3 text-xs text-subtle">
-            支持手机摄像头、扫码枪（键盘口）和粘贴。覆盖市面主流一维 / 二维 / GS1 条码。
+            支持连续扫码：识别成功后自动加入待提交（数量 1），摄像头保持开启可继续扫描。也支持扫码枪和粘贴。
           </p>
           <p className="mt-1 break-words text-xs leading-5 text-subtle">{SUPPORTED_FORMATS.join(" · ")}</p>
           <Label className="mt-3 block">扫码结果 / 粘贴条码</Label>
@@ -275,7 +322,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
           <span className="text-xs text-subtle">{pending.length} 条</span>
         </div>
         {pending.length === 0 ? (
-          <p className="py-5 text-center text-sm text-muted">扫码匹配后加入，可一次提交多条</p>
+          <p className="py-5 text-center text-sm text-muted">连续扫码会自动加入，也可手动确认后一次提交</p>
         ) : (
           <ul className="flex flex-col gap-2">
             {pending.map((p) => (
@@ -317,8 +364,8 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
         open={cameraOpen}
         onClose={() => setCameraOpen(false)}
         onDetect={(code) => {
-          setCameraOpen(false);
-          applyMatch(code);
+          // Continuous mode: keep camera open, auto-add on match
+          applyMatch(code, { continuous: true });
         }}
       />
     </div>
