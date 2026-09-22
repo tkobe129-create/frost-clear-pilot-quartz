@@ -31,12 +31,18 @@ export function ScannerOverlay({ open, onClose, onDetect }: Props) {
 
     let stopped = false;
     let timer: number | null = null;
+    let cooldownTimer: number | null = null;
     let stream: MediaStream | null = null;
 
     const emit = (value: string) => {
       const v = value.trim();
       if (!v || v === lastValue.current) return;
       lastValue.current = v;
+      // Allow the same barcode to be scanned again after a short cooldown (continuous mode)
+      if (cooldownTimer) window.clearTimeout(cooldownTimer);
+      cooldownTimer = window.setTimeout(() => {
+        lastValue.current = "";
+      }, 1200);
       try {
         navigator.vibrate?.(40);
       } catch {
@@ -79,7 +85,7 @@ export function ScannerOverlay({ open, onClose, onDetect }: Props) {
         const caps = track?.getCapabilities?.() as { torch?: boolean } | undefined;
         if (caps?.torch) setTorchAvailable(true);
 
-        setStatus("将条码对准取景框，保持稳定");
+        setStatus("连续扫码中 · 识别成功后可继续扫描");
 
         const reader = createZxingReader();
         const detector = await createNativeDetector();
@@ -135,6 +141,7 @@ export function ScannerOverlay({ open, onClose, onDetect }: Props) {
     return () => {
       stopped = true;
       if (timer) window.clearTimeout(timer);
+      if (cooldownTimer) window.clearTimeout(cooldownTimer);
       stream?.getTracks().forEach((t) => t.stop());
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -202,7 +209,7 @@ export function ScannerOverlay({ open, onClose, onDetect }: Props) {
   return (
     <div className="fixed inset-0 z-[80] flex h-dvh w-full flex-col bg-fg text-primary-fg">
       <div className="flex items-center justify-between px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
-        <p className="text-sm font-medium">扫描条码</p>
+        <p className="text-sm font-medium">连续扫码</p>
         <div className="flex items-center">
           {torchAvailable ? (
             <button
@@ -241,7 +248,7 @@ export function ScannerOverlay({ open, onClose, onDetect }: Props) {
       <div className="px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4">
         <p className="min-h-5 text-center text-xs text-primary-fg/75">{error || status}</p>
         <p className="mt-1 text-center text-[11px] text-primary-fg/50">
-          试剂盒多为 GS1 / Data Matrix / Code 128，请横放条码并靠近取景框
+          识别成功后自动加入待提交，可连续扫描多个条码，完成后点右上角关闭
         </p>
         {error ? (
           <div className="mt-3 flex items-center justify-center gap-2 text-subtle">
@@ -263,7 +270,7 @@ export function ScannerOverlay({ open, onClose, onDetect }: Props) {
             className={cn("h-12 border-primary-fg/20 bg-transparent text-primary-fg")}
             onClick={onClose}
           >
-            取消
+            完成
           </Button>
         </div>
         <input
