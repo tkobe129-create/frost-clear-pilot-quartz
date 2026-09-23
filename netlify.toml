@@ -1,11 +1,11 @@
 [build]
   command = "npm run build"
-  publish = "dist/client"
+  publish = "dist"
 
 [build.environment]
   NODE_VERSION = "22"
 
-# SPA + SSR handled by Nitro server function; keep client assets published
+# Client assets land in dist/ (see dist/assets/*); Nitro serves SSR/functions.
 
 [[headers]]
   for = "/assets/*"
