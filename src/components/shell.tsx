@@ -27,7 +27,7 @@ type Props = {
 
 export function AppShell({ tab, onTab, alertCount, children }: Props) {
   return (
-    <div className="flex min-h-dvh w-full bg-bg pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] md:h-dvh md:overflow-hidden">
+    <div className="flex h-dvh max-h-dvh w-full overflow-hidden bg-bg pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       <aside className="hidden h-full w-56 shrink-0 flex-col border-r border-border bg-surface md:flex lg:w-60">
         <div className="flex items-center gap-3 px-4 py-5">
           <BrandMark />
@@ -51,7 +51,7 @@ export function AppShell({ tab, onTab, alertCount, children }: Props) {
         <p className="px-4 pb-5 text-xs text-subtle">检验科 · 试剂管家</p>
       </aside>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <header className="shrink-0 border-b border-border/80 bg-bg/92 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-md md:px-8 md:py-4">
           <div className="flex items-center gap-3">
             <div className="md:hidden">
@@ -68,11 +68,14 @@ export function AppShell({ tab, onTab, alertCount, children }: Props) {
           </div>
         </header>
 
-        <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4 md:px-8 md:py-6">
+        <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:px-8 md:py-6 md:pb-6">
           <div className="mx-auto w-full max-w-5xl">{children}</div>
         </main>
 
-        <nav className="shrink-0 border-t border-border bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md md:hidden">
+        <nav
+          className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md md:hidden"
+          aria-label="主导航"
+        >
           <ul className="grid grid-cols-4">
             {TABS.map((item) => (
               <li key={item.id}>
@@ -125,7 +128,7 @@ function NavButton({
       onClick={onClick}
       className={cn(
         "relative transition-colors",
-        layout === "bottom" && "flex h-14 w-full flex-col items-center justify-center gap-0.5 text-xs",
+        layout === "bottom" && "flex min-h-14 w-full flex-col items-center justify-center gap-0.5 text-xs",
         layout === "side" && "flex h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium",
         active ? "text-primary" : "text-subtle",
         layout === "side" && active && "bg-primary-soft",
