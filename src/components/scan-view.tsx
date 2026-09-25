@@ -30,13 +30,74 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [flash, setFlash] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Keep latest pending & tab for continuous auto-add without stale closure
+  // Keep latest pending & tab for continuous auto-add without stale closure.
   const pendingRef = useRef(pending);
   const tabRef = useRef(tab);
   pendingRef.current = pending;
   tabRef.current = tab;
 
   const demos = useMemo(() => reagents.slice(0, 6), [reagents]);
+
+  function clearMatch() {
+    setMatched(null);
+    setFields({});
+    setRaw("");
+    setQuantity("1");
+    setLotNumber("");
+    setExpiryDate("");
+    setProductionDate("");
+    setNote("");
+  }
+
+  function addContinuousItem(
+    reagent: Reagent,
+    details: { lotNumber: string; expiryDate: string; productionDate: string },
+  ) {
+    let exceeded = false;
+    setPending((list) => {
+      const sameItem = list.find(
+        (item) =>
+          item.reagentId === reagent.id &&
+          item.lotNumber === details.lotNumber &&
+          item.expiryDate === details.expiryDate &&
+          item.productionDate === details.productionDate,
+      );
+      const already = list.filter((item) => item.reagentId === reagent.id).reduce((sum, item) => sum + item.quantity, 0);
+
+      if (tabRef.current === "out" && already + 1 > reagent.stockQuantity) {
+        exceeded = true;
+        return list;
+      }
+
+      const next = sameItem
+        ? list.map((item) => (item.key === sameItem.key ? { ...item, quantity: item.quantity + 1 } : item))
+        : [
+            ...list,
+            {
+              key: `${reagent.id}-${Date.now()}-${list.length}`,
+              reagentId: reagent.id,
+              reagentName: reagent.name,
+              unit: reagent.unit,
+              quantity: 1,
+              lotNumber: details.lotNumber,
+              expiryDate: details.expiryDate,
+              productionDate: details.productionDate,
+              note: "",
+              stockQuantity: reagent.stockQuantity,
+            },
+          ];
+      // Keep rapid scanner-keyboard events in sync even before React renders again.
+      pendingRef.current = next;
+      return next;
+    });
+
+    if (exceeded) {
+      toast.error(`出库数量超过可用库存 · ${reagent.name}`);
+      return false;
+    }
+    toast.success(`已加入 ${reagent.name} ×1，可继续扫码`);
+    return true;
+  }
 
   function applyMatch(code: string, options?: { continuous?: boolean }) {
     const cleaned = stripSymbologyId(code);
@@ -56,43 +117,13 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
       setFlash(true);
       window.setTimeout(() => setFlash(false), 420);
 
-      // Continuous camera mode: auto-add qty=1 and clear form so next scan is ready
+      // Camera and scanner-gun continuous mode: add immediately, merge repeated
+      // scans of the same reagent/lot, and leave the input ready for the next scan.
       if (options?.continuous) {
-        const qty = 1;
-        if (tabRef.current === "out") {
-          const already = pendingRef.current
-            .filter((p) => p.reagentId === result.reagent.id)
-            .reduce((s, p) => s + p.quantity, 0);
-          if (qty > result.reagent.stockQuantity - already) {
-            toast.error(`出库数量超过可用库存 · ${result.reagent.name}`);
-            return;
-          }
+        if (addContinuousItem(result.reagent, { lotNumber: lot, expiryDate: exp, productionDate: prod })) {
+          clearMatch();
+          window.setTimeout(() => inputRef.current?.focus(), 0);
         }
-        setPending((list) => [
-          ...list,
-          {
-            key: `${result.reagent.id}-${Date.now()}`,
-            reagentId: result.reagent.id,
-            reagentName: result.reagent.name,
-            unit: result.reagent.unit,
-            quantity: qty,
-            lotNumber: lot,
-            expiryDate: exp,
-            productionDate: prod,
-            note: "",
-            stockQuantity: result.reagent.stockQuantity,
-          },
-        ]);
-        toast.success(`已加入 ${result.reagent.name} ×1，可继续扫码`);
-        // Clear form so UI is ready for next scan (camera stays open)
-        setMatched(null);
-        setFields({});
-        setRaw("");
-        setQuantity("1");
-        setLotNumber("");
-        setExpiryDate("");
-        setProductionDate("");
-        setNote("");
         return;
       }
 
@@ -102,17 +133,6 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
       setFields({});
       toast.error("未找到匹配试剂，请先在试剂页预录");
     }
-  }
-
-  function clearMatch() {
-    setMatched(null);
-    setFields({});
-    setRaw("");
-    setQuantity("1");
-    setLotNumber("");
-    setExpiryDate("");
-    setProductionDate("");
-    setNote("");
   }
 
   function addToPending() {
@@ -159,6 +179,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
     }
     await onSubmit(tab, pending);
     setPending([]);
+    pendingRef.current = [];
   }
 
   useEffect(() => {
@@ -171,7 +192,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
         return;
       }
       e.preventDefault();
-      applyMatch(t);
+      applyMatch(t, { continuous: true });
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
@@ -205,23 +226,23 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
             打开摄像头连续扫码
           </Button>
           <p className="mt-3 text-xs text-subtle">
-            支持连续扫码：识别成功后自动加入待提交（数量 1），摄像头保持开启可继续扫描。也支持扫码枪和粘贴。
+            摄像头和扫码枪均支持连续扫码：识别成功后自动加入待提交，同种试剂会直接累加数量，无需逐次确认。
           </p>
           <p className="mt-1 break-words text-xs leading-5 text-subtle">{SUPPORTED_FORMATS.join(" · ")}</p>
-          <Label className="mt-3 block">扫码结果 / 粘贴条码</Label>
+          <Label className="mt-3 block">扫码结果 / 扫码枪输入</Label>
           <Input
             ref={inputRef}
             value={raw}
             autoCapitalize="off"
             autoCorrect="off"
             spellCheck={false}
-            placeholder="对准扫码枪，或粘贴条码后回车"
+            placeholder="扫码枪扫入后自动加入，或粘贴条码后回车"
             className="mt-1 font-mono"
             onChange={(e) => setRaw(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                applyMatch(raw);
+                applyMatch(raw, { continuous: true });
               }
             }}
           />
@@ -230,7 +251,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
               <button
                 key={r.id}
                 type="button"
-                onClick={() => applyMatch(buildDemoBarcode(r))}
+                onClick={() => applyMatch(buildDemoBarcode(r), { continuous: true })}
                 className="rounded-full border border-border bg-bg-elevated px-2.5 py-1 text-xs text-muted"
               >
                 示例 · {r.name.replace(/测定试剂盒|测定试剂|试剂盒/g, "")}
@@ -364,7 +385,6 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
         open={cameraOpen}
         onClose={() => setCameraOpen(false)}
         onDetect={(code) => {
-          // Continuous mode: keep camera open, auto-add on match
           applyMatch(code, { continuous: true });
         }}
       />
