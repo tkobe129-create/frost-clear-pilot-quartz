@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, Minus, Plus, Trash2 } from "lucide-react";
+import { Camera, Minus, Plus, Trash2, Volume2 } from "lucide-react";
 import { toast } from "sonner";
 import { ScannerOverlay } from "@/components/scanner-overlay";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { buildDemoBarcode, matchReagentByScan, parseBarcode, stripSymbologyId, SUPPORTED_FORMATS } from "@/lib/scanner";
+import { announceScanSuccess } from "@/lib/scan-feedback";
 import type { ExtractedFields, PendingItem, Reagent, StockType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -92,6 +93,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
     // one render, but the next event still sees every item scanned so far.
     pendingRef.current = next;
     setPending(next);
+    announceScanSuccess(1, reagent.unit);
     toast.success(`已加入 ${reagent.name} ×1，可继续扫码`);
     return true;
   }
@@ -172,6 +174,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
     ];
     pendingRef.current = next;
     setPending(next);
+    announceScanSuccess(qty, matched.unit);
     toast.success("已加入待提交");
     clearMatch();
     inputRef.current?.focus();
@@ -245,6 +248,10 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
             摄像头和扫码枪均支持连续扫码：识别成功后自动加入待提交，同种试剂会直接累加数量，无需逐次确认。
           </p>
           <p className="mt-1 break-words text-xs leading-5 text-subtle">{SUPPORTED_FORMATS.join(" · ")}</p>
+          <p className="mt-2 flex items-center gap-1.5 text-xs text-subtle">
+            <Volume2 className="size-3.5" />
+            扫码成功会语音播报“成功扫码 1 盒”
+          </p>
           <Label className="mt-3 block">扫码结果 / 扫码枪输入</Label>
           <Input
             ref={inputRef}
