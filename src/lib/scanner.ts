@@ -396,18 +396,3 @@ export function daysUntil(dateStr: string): number | null {
   today.setHours(0, 0, 0, 0);
   return Math.round((d.getTime() - today.getTime()) / 86400000);
 }
-
-export const SUPPORTED_FORMATS = [
-  "QR 码",
-  "GS1-128 / EAN-128",
-  "Code 128 / 39 / 93",
-  "EAN-13 / EAN-8",
-  "UPC-A / UPC-E",
-  "Data Matrix",
-  "PDF417",
-  "Aztec",
-  "ITF / Interleaved 2 of 5",
-  "Codabar",
-  "GS1 DataBar",
-  "GS1 Digital Link",
-] as const;
