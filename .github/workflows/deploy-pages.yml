@@ -47,8 +47,10 @@ jobs:
           path: dist-github
 
   deploy:
+    # Use a dedicated environment so this fixed Arena branch is deployable
+    # without the repository's main-branch-only protection on github-pages.
     environment:
-      name: github-pages
+      name: github-pages-arena
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: build
