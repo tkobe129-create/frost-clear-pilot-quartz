@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Camera, ChevronRight, Plus, Search } from "lucide-react";
+import { ArrowLeft, Camera, ChevronRight, FolderOpen, Plus, Search } from "lucide-react";
 import { toast } from "sonner";
 import { ScannerOverlay } from "@/components/scanner-overlay";
 import { Badge } from "@/components/ui/badge";
@@ -118,16 +118,40 @@ export function ReagentsView({
   onSave: (data: SavePayload) => Promise<void>;
 }) {
   const [q, setQ] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
 
+  const categorySummaries = useMemo(() => {
+    const grouped = new Map<string, { category: string; reagents: Reagent[]; totalStock: number; lowCount: number; outCount: number }>();
+    for (const reagent of reagents) {
+      const category = reagent.category.trim() || "未分类";
+      const current = grouped.get(category) ?? { category, reagents: [], totalStock: 0, lowCount: 0, outCount: 0 };
+      current.reagents.push(reagent);
+      current.totalStock += reagent.stockQuantity;
+      if (reagent.minStock > 0 && reagent.stockQuantity <= reagent.minStock) current.lowCount += 1;
+      if (reagent.stockQuantity === 0) current.outCount += 1;
+      grouped.set(category, current);
+    }
+    return Array.from(grouped.values()).sort((a, b) => {
+      const ai = CATEGORIES.indexOf(a.category as (typeof CATEGORIES)[number]);
+      const bi = CATEGORIES.indexOf(b.category as (typeof CATEGORIES)[number]);
+      return (ai < 0 ? CATEGORIES.length : ai) - (bi < 0 ? CATEGORIES.length : bi) || a.category.localeCompare(b.category, "zh-CN");
+    });
+  }, [reagents]);
+
+  const categoryReagents = useMemo(
+    () => categorySummaries.find((group) => group.category === selectedCategory)?.reagents ?? [],
+    [categorySummaries, selectedCategory],
+  );
+
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
-    if (!s) return reagents;
-    return reagents.filter((r) =>
-      [r.name, r.code, r.manufacturer, r.category, r.location, r.lotNumber].join(" ").toLowerCase().includes(s),
+    if (!s) return categoryReagents;
+    return categoryReagents.filter((r) =>
+      [r.name, r.code, r.manufacturer, r.location, r.lotNumber].join(" ").toLowerCase().includes(s),
     );
-  }, [q, reagents]);
+  }, [categoryReagents, q]);
 
   function applyBarcode(code: string) {
     if (!draft) return;
@@ -188,6 +212,7 @@ export function ReagentsView({
       supplier: draft.supplier,
       unitPrice: Number(draft.unitPrice) || 0,
     });
+    if (selectedCategory) setSelectedCategory(draft.category.trim() || "未分类");
     setDraft(null);
   }
 
@@ -294,18 +319,92 @@ export function ReagentsView({
     );
   }
 
+  if (!selectedCategory) {
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">试剂分类</h2>
+            <p className="mt-0.5 text-xs text-muted">请选择类别查看该组试剂和总库存</p>
+          </div>
+          <Button className="shrink-0" onClick={() => setDraft(emptyDraft())}>
+            <Plus className="size-4" />
+            预录
+          </Button>
+        </div>
+
+        {categorySummaries.length > 0 ? (
+          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {categorySummaries.map((group) => (
+              <li key={group.category}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQ("");
+                    setSelectedCategory(group.category);
+                  }}
+                  className="flex w-full items-center gap-3 rounded-xl border border-border bg-surface px-4 py-4 text-left shadow-card transition-colors hover:border-primary/40 hover:bg-primary-soft/30"
+                >
+                  <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary">
+                    <FolderOpen className="size-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold">{group.category}</span>
+                    <span className="mt-1 block text-xs text-muted">{group.reagents.length} 种试剂</span>
+                    <span className="mt-2 block text-xs text-subtle">
+                      库存合计 <strong className="font-semibold text-fg tabular">{group.totalStock}</strong>
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2 text-right">
+                    <span className="hidden text-xs text-subtle sm:block">
+                      {group.outCount > 0 ? `${group.outCount} 个缺货` : group.lowCount > 0 ? `${group.lowCount} 个低库存` : "库存正常"}
+                    </span>
+                    <ChevronRight className="size-4 text-subtle" />
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="rounded-xl border border-dashed border-border py-12 text-center text-sm text-muted">暂无试剂类别</p>
+        )}
+      </div>
+    );
+  }
+
+  const selectedTotalStock = categoryReagents.reduce((total, reagent) => total + reagent.stockQuantity, 0);
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex gap-2">
-        <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle" />
-          <Input className="pl-9" placeholder="搜索名称 / GTIN / 厂家" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="flex items-start gap-2">
+        <button
+          type="button"
+          className="flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2 text-sm text-muted hover:bg-bg-elevated hover:text-fg"
+          onClick={() => {
+            setQ("");
+            setSelectedCategory(null);
+          }}
+        >
+          <ArrowLeft className="size-4" />
+          分类
+        </button>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-sm font-semibold">{selectedCategory}</h2>
+          <p className="mt-0.5 text-xs text-muted">
+            {categoryReagents.length} 种试剂 · 库存合计 <strong className="font-semibold text-fg tabular">{selectedTotalStock}</strong>
+          </p>
         </div>
         <Button className="shrink-0" onClick={() => setDraft(emptyDraft())}>
           <Plus className="size-4" />
           预录
         </Button>
       </div>
+
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle" />
+        <Input className="pl-9" placeholder="搜索名称 / GTIN / 厂家" value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
+
       <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
         {filtered.map((r) => {
           const days = daysUntil(r.expiryDate);
@@ -325,7 +424,6 @@ export function ReagentsView({
                     {r.manufacturer} · {r.specification || "无规格"} · {r.location || "无货位"}
                   </p>
                   <div className="mt-1.5 flex flex-wrap gap-1">
-                    <Badge variant="muted">{r.category || "未分类"}</Badge>
                     {expired ? <Badge variant="danger">已过期</Badge> : null}
                     {expiring && !expired ? <Badge variant="warn">近效期</Badge> : null}
                     {low ? <Badge variant="warn">低库存</Badge> : null}
@@ -336,7 +434,7 @@ export function ReagentsView({
                   <p className={cn("text-base font-semibold tabular", low || r.stockQuantity === 0 ? "text-warn" : "text-fg")}>
                     {r.stockQuantity}
                   </p>
-                  <p className="text-xs text-subtle">{r.unit}</p>
+                  <p className="text-xs text-subtle">总库存 · {r.unit}</p>
                 </div>
                 <ChevronRight className="size-4 shrink-0 text-subtle" />
               </button>
