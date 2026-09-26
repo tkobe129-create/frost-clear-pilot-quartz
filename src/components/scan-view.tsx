@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, Minus, Plus, Trash2, Volume2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Minus, Plus, Trash2, Volume2 } from "lucide-react";
 import { toast } from "sonner";
 import { ScannerOverlay } from "@/components/scanner-overlay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { buildDemoBarcode, matchReagentByScan, parseBarcode, stripSymbologyId, SUPPORTED_FORMATS } from "@/lib/scanner";
+import { matchReagentByScan, parseBarcode, stripSymbologyId, SUPPORTED_FORMATS } from "@/lib/scanner";
 import { announceScanSuccess, unlockScanAudio } from "@/lib/scan-feedback";
 import { chooseFefoBatch } from "@/lib/stock-batches";
 import type { ExtractedFields, PendingItem, Reagent, StockRecord, StockType } from "@/lib/types";
@@ -40,8 +40,6 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
   const tabRef = useRef<StockType>(tab);
   pendingRef.current = pending;
   tabRef.current = tab;
-
-  const demos = useMemo(() => reagents.slice(0, 6), [reagents]);
 
   function clearMatch() {
     setMatched(null);
@@ -114,6 +112,8 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
   function changeTab(next: StockType) {
     tabRef.current = next;
     setTab(next);
+    unlockScanAudio();
+    setCameraOpen(true);
   }
 
   function applyMatch(code: string, options?: { continuous?: boolean }) {
@@ -262,7 +262,7 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
               type="button"
               onClick={() => changeTab(id)}
               className={cn(
-                "h-11 rounded-md text-sm font-medium transition-colors",
+                "h-16 rounded-md text-base font-semibold transition-colors sm:h-14",
                 tab === id ? (id === "in" ? "bg-primary text-primary-fg" : "bg-out text-primary-fg") : "text-muted",
               )}
             >
@@ -277,18 +277,8 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
         ) : null}
 
         <section className={cn("rounded-xl border border-border bg-surface p-3 shadow-card sm:p-4", flash && "scan-flash")}>
-          <Button
-            className="h-12 w-full"
-            onClick={() => {
-              unlockScanAudio();
-              setCameraOpen(true);
-            }}
-          >
-            <Camera className="size-4" />
-            打开摄像头连续扫码
-          </Button>
-          <p className="mt-3 text-xs text-subtle">
-            摄像头和扫码枪均支持连续扫码：识别成功后自动加入待提交，同种试剂会直接累加数量，无需逐次确认。
+          <p className="text-xs text-subtle">
+            点击上方入库 / 出库按钮即可进入摄像头连续扫码；扫码枪也支持连续扫码，识别成功后自动加入待提交，同种试剂会直接累加数量。
           </p>
           <p className="mt-1 break-words text-xs leading-5 text-subtle">{SUPPORTED_FORMATS.join(" · ")}</p>
           <button
@@ -321,18 +311,6 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
               }
             }}
           />
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {demos.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => applyMatch(buildDemoBarcode(r), { continuous: true })}
-                className="rounded-full border border-border bg-bg-elevated px-2.5 py-1 text-xs text-muted"
-              >
-                示例 · {r.name.replace(/测定试剂盒|测定试剂|试剂盒/g, "")}
-              </button>
-            ))}
-          </div>
         </section>
 
         {segments.length > 0 ? (
