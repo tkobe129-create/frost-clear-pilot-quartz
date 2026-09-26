@@ -153,6 +153,8 @@ export default defineConfig(({ command, isPreview }) => ({
     host: "0.0.0.0",
     port: 8080,
     strictPort: true,
+    // Arena proxies the live preview through a generated host name.
+    allowedHosts: true,
   },
   preview: {
     host: "127.0.0.1",

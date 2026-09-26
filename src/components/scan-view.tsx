@@ -30,9 +30,11 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [flash, setFlash] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Keep latest pending & tab for continuous auto-add without stale closure.
-  const pendingRef = useRef(pending);
-  const tabRef = useRef(tab);
+  // Scans can arrive before React paints the previous result. Keep refs as the
+  // synchronous source of truth so rapid scanner-gun events never overwrite a
+  // previous item or read an old stock direction.
+  const pendingRef = useRef<PendingItem[]>([]);
+  const tabRef = useRef<StockType>(tab);
   pendingRef.current = pending;
   tabRef.current = tab;
 
@@ -53,50 +55,50 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
     reagent: Reagent,
     details: { lotNumber: string; expiryDate: string; productionDate: string },
   ) {
-    let exceeded = false;
-    setPending((list) => {
-      const sameItem = list.find(
-        (item) =>
-          item.reagentId === reagent.id &&
-          item.lotNumber === details.lotNumber &&
-          item.expiryDate === details.expiryDate &&
-          item.productionDate === details.productionDate,
-      );
-      const already = list.filter((item) => item.reagentId === reagent.id).reduce((sum, item) => sum + item.quantity, 0);
+    const list = pendingRef.current;
+    const sameItem = list.find(
+      (item) =>
+        item.reagentId === reagent.id &&
+        item.lotNumber === details.lotNumber &&
+        item.expiryDate === details.expiryDate &&
+        item.productionDate === details.productionDate,
+    );
+    const already = list.filter((item) => item.reagentId === reagent.id).reduce((sum, item) => sum + item.quantity, 0);
 
-      if (tabRef.current === "out" && already + 1 > reagent.stockQuantity) {
-        exceeded = true;
-        return list;
-      }
-
-      const next = sameItem
-        ? list.map((item) => (item.key === sameItem.key ? { ...item, quantity: item.quantity + 1 } : item))
-        : [
-            ...list,
-            {
-              key: `${reagent.id}-${Date.now()}-${list.length}`,
-              reagentId: reagent.id,
-              reagentName: reagent.name,
-              unit: reagent.unit,
-              quantity: 1,
-              lotNumber: details.lotNumber,
-              expiryDate: details.expiryDate,
-              productionDate: details.productionDate,
-              note: "",
-              stockQuantity: reagent.stockQuantity,
-            },
-          ];
-      // Keep rapid scanner-keyboard events in sync even before React renders again.
-      pendingRef.current = next;
-      return next;
-    });
-
-    if (exceeded) {
+    if (tabRef.current === "out" && already + 1 > reagent.stockQuantity) {
       toast.error(`出库数量超过可用库存 · ${reagent.name}`);
       return false;
     }
+
+    const next = sameItem
+      ? list.map((item) => (item.key === sameItem.key ? { ...item, quantity: item.quantity + 1 } : item))
+      : [
+          ...list,
+          {
+            key: `${reagent.id}-${Date.now()}-${list.length}`,
+            reagentId: reagent.id,
+            reagentName: reagent.name,
+            unit: reagent.unit,
+            quantity: 1,
+            lotNumber: details.lotNumber,
+            expiryDate: details.expiryDate,
+            productionDate: details.productionDate,
+            note: "",
+            stockQuantity: reagent.stockQuantity,
+          },
+        ];
+
+    // Update both stores immediately. React may batch several scan events into
+    // one render, but the next event still sees every item scanned so far.
+    pendingRef.current = next;
+    setPending(next);
     toast.success(`已加入 ${reagent.name} ×1，可继续扫码`);
     return true;
+  }
+
+  function changeTab(next: StockType) {
+    tabRef.current = next;
+    setTab(next);
   }
 
   function applyMatch(code: string, options?: { continuous?: boolean }) {
@@ -145,14 +147,15 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
       toast.error("请输入有效数量");
       return;
     }
-    if (tab === "out") {
-      const already = pending.filter((p) => p.reagentId === matched.id).reduce((s, p) => s + p.quantity, 0);
+    const list = pendingRef.current;
+    if (tabRef.current === "out") {
+      const already = list.filter((p) => p.reagentId === matched.id).reduce((s, p) => s + p.quantity, 0);
       if (qty > matched.stockQuantity - already) {
         toast.error("出库数量超过可用库存");
         return;
       }
     }
-    setPending((list) => [
+    const next = [
       ...list,
       {
         key: `${matched.id}-${Date.now()}`,
@@ -166,20 +169,33 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
         note,
         stockQuantity: matched.stockQuantity,
       },
-    ]);
+    ];
+    pendingRef.current = next;
+    setPending(next);
     toast.success("已加入待提交");
     clearMatch();
     inputRef.current?.focus();
   }
 
   async function submit() {
-    if (pending.length === 0) {
+    const items = pendingRef.current;
+    if (items.length === 0) {
       toast.error("没有待提交的记录");
       return;
     }
-    await onSubmit(tab, pending);
-    setPending([]);
-    pendingRef.current = [];
+    const submittedType = tabRef.current;
+    const submittedQuantities = new Map(items.map((item) => [item.key, item.quantity]));
+    await onSubmit(submittedType, items);
+
+    // Keep scans that arrived while the batch was being submitted. This is
+    // important when the camera stays open for a truly continuous workflow.
+    const remaining = pendingRef.current.flatMap((item) => {
+      const submittedQuantity = submittedQuantities.get(item.key) ?? 0;
+      const quantity = item.quantity - submittedQuantity;
+      return quantity > 0 ? [{ ...item, quantity }] : [];
+    });
+    pendingRef.current = remaining;
+    setPending(remaining);
   }
 
   useEffect(() => {
@@ -209,7 +225,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
             <button
               key={id}
               type="button"
-              onClick={() => setTab(id)}
+              onClick={() => changeTab(id)}
               className={cn(
                 "h-11 rounded-md text-sm font-medium transition-colors",
                 tab === id ? (id === "in" ? "bg-primary text-primary-fg" : "bg-out text-primary-fg") : "text-muted",
@@ -361,7 +377,11 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
                   <button
                     type="button"
                     className="flex size-11 items-center justify-center text-subtle"
-                    onClick={() => setPending((list) => list.filter((x) => x.key !== p.key))}
+                    onClick={() => {
+                      const next = pendingRef.current.filter((x) => x.key !== p.key);
+                      pendingRef.current = next;
+                      setPending(next);
+                    }}
                     aria-label="移除"
                   >
                     <Trash2 className="size-4" />
