@@ -25,7 +25,10 @@ export function unlockScanAudio(): void {
 
   // iOS Safari can also gate speech synthesis until the first user gesture.
   try {
-    window.speechSynthesis?.cancel();
+    const synthesis = window.speechSynthesis;
+    synthesis?.getVoices();
+    synthesis?.resume();
+    synthesis?.cancel();
   } catch {
     // Audio is an enhancement; scanning remains available.
   }
@@ -86,7 +89,7 @@ function playScanSuccessTone(): void {
       oscillator.frequency.setValueAtTime(880, start);
       oscillator.frequency.setValueAtTime(1175, start + 0.09);
       gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(0.16, start + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.32, start + 0.012);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.22);
       oscillator.connect(gain);
       gain.connect(context.destination);

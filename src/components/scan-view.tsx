@@ -464,6 +464,10 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
         open={cameraOpen}
         onClose={() => setCameraOpen(false)}
         onDetect={(code) => {
+          // Mobile browsers may suspend Web Audio again while the camera stream
+          // is active, so resume it on every camera detection as well as when
+          // the overlay is opened.
+          unlockScanAudio();
           applyMatch(code, { continuous: true });
         }}
       />
