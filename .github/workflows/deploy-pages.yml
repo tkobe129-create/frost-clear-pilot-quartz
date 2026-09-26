@@ -37,6 +37,7 @@ jobs:
         env:
           GITHUB_PAGES: "true"
 
+      # The repository Pages source is configured as GitHub Actions.
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
