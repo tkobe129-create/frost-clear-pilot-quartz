@@ -97,14 +97,12 @@ export function AppShell({ tab, onTab, alertCount, children }: Props) {
 
 function BrandMark() {
   return (
-    <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary text-primary-fg">
-      <svg viewBox="0 0 32 32" className="size-5" aria-hidden>
-        <path
-          fill="currentColor"
-          d="M16 4.8l8.2 3.3v8.4c0 4.9-3.4 8.6-8.2 10.3C10.2 25.1 6.8 21.4 6.8 16.5V8.1L16 4.8z"
-        />
-      </svg>
-    </div>
+    <img
+      src={`${import.meta.env.BASE_URL}__grok/icon-180.png`}
+      alt=""
+      aria-hidden="true"
+      className="size-9 shrink-0 rounded-md object-cover"
+    />
   );
 }
 
