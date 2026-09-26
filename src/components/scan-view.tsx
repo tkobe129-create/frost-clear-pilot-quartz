@@ -71,8 +71,11 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
       return false;
     }
 
+    const accumulatedQuantity = sameItem ? sameItem.quantity + 1 : 1;
     const next = sameItem
-      ? list.map((item) => (item.key === sameItem.key ? { ...item, quantity: item.quantity + 1 } : item))
+      ? list.map((item) =>
+          item.key === sameItem.key ? { ...item, quantity: accumulatedQuantity } : item,
+        )
       : [
           ...list,
           {
@@ -80,7 +83,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
             reagentId: reagent.id,
             reagentName: reagent.name,
             unit: reagent.unit,
-            quantity: 1,
+            quantity: accumulatedQuantity,
             lotNumber: details.lotNumber,
             expiryDate: details.expiryDate,
             productionDate: details.productionDate,
@@ -93,8 +96,13 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
     // one render, but the next event still sees every item scanned so far.
     pendingRef.current = next;
     setPending(next);
-    announceScanSuccess(1, reagent.unit);
-    toast.success(`已加入 ${reagent.name} ×1，可继续扫码`);
+    announceScanSuccess(accumulatedQuantity, reagent.unit);
+    // Reuse one toast so rapid continuous scans show the accumulated quantity
+    // instead of stacking several misleading "×1" messages.
+    toast.success(`已加入 ${reagent.name} ×${accumulatedQuantity}，可继续扫码`, {
+      id: "continuous-scan-feedback",
+      duration: 1400,
+    });
     return true;
   }
 
