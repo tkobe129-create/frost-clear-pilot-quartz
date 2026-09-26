@@ -1,8 +1,9 @@
-import { Check, ClipboardCopy, PackagePlus, Truck } from "lucide-react";
+import { Check, ClipboardCopy, Download, PackagePlus, Truck } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { computeAlerts, formatWhen, orderText } from "@/lib/alerts";
+import { exportPurchaseOrderExcel } from "@/lib/export-excel";
 import type { PurchaseOrder, Reagent, ReagentAlert, StockRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -47,6 +48,15 @@ export function HomeView({
       toast.success("补货单已复制，可发给供应商");
     } catch {
       toast.error("复制失败，请手动摘录清单");
+    }
+  }
+
+  function exportOrder(order: PurchaseOrder) {
+    try {
+      exportPurchaseOrderExcel(order);
+      toast.success("采购单 Excel 已下载");
+    } catch {
+      toast.error("导出失败，请稍后重试");
     }
   }
 
@@ -122,6 +132,7 @@ export function HomeView({
                 order={latestOrder}
                 busy={receivingId === latestOrder.id}
                 onCopy={() => copyOrder(latestOrder)}
+                onExport={() => exportOrder(latestOrder)}
                 onReceive={() => onReceive(latestOrder.id)}
               />
               {orders.length > 1 ? (
@@ -200,11 +211,13 @@ function OrderCard({
   order,
   busy,
   onCopy,
+  onExport,
   onReceive,
 }: {
   order: PurchaseOrder;
   busy: boolean;
   onCopy: () => void;
+  onExport: () => void;
   onReceive: () => void;
 }) {
   return (
@@ -228,6 +241,10 @@ function OrderCard({
         <Button variant="outline" size="sm" className="h-11 flex-1 sm:h-9" onClick={onCopy}>
           <ClipboardCopy className="size-3.5" />
           复制清单
+        </Button>
+        <Button variant="outline" size="sm" className="h-11 flex-1 sm:h-9" onClick={onExport}>
+          <Download className="size-3.5" />
+          导出 Excel
         </Button>
         {order.status === "submitted" ? (
           <Button size="sm" className="h-11 flex-1 sm:h-9" disabled={busy} onClick={onReceive}>

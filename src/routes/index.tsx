@@ -150,6 +150,7 @@ function Home() {
       {tab === "scan" ? (
         <ScanView
           reagents={reagents}
+          records={records}
           submitting={stockMutation.isPending}
           onSubmit={async (type, items) => {
             await stockMutation.mutateAsync({ type, items });

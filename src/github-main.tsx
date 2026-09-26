@@ -130,7 +130,7 @@ export function GitHubPagesApp() {
       ) : null}
 
       {!loading && tab === "scan" ? (
-        <ScanView reagents={reagents} submitting={submitting} onSubmit={handleSubmit} />
+        <ScanView reagents={reagents} records={records} submitting={submitting} onSubmit={handleSubmit} />
       ) : null}
 
       {!loading && tab === "reagents" ? (

@@ -8,16 +8,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { buildDemoBarcode, matchReagentByScan, parseBarcode, stripSymbologyId, SUPPORTED_FORMATS } from "@/lib/scanner";
 import { announceScanSuccess, unlockScanAudio } from "@/lib/scan-feedback";
-import type { ExtractedFields, PendingItem, Reagent, StockType } from "@/lib/types";
+import { chooseFefoBatch } from "@/lib/stock-batches";
+import type { ExtractedFields, PendingItem, Reagent, StockRecord, StockType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Props = {
   reagents: Reagent[];
+  records: StockRecord[];
   submitting: boolean;
   onSubmit: (type: StockType, items: PendingItem[]) => Promise<void>;
 };
 
-export function ScanView({ reagents, submitting, onSubmit }: Props) {
+export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
   const [tab, setTab] = useState<StockType>("in");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [raw, setRaw] = useState("");
@@ -54,7 +56,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
 
   function addContinuousItem(
     reagent: Reagent,
-    details: { lotNumber: string; expiryDate: string; productionDate: string },
+    details: { lotNumber: string; expiryDate: string; productionDate: string; fefo?: boolean },
   ) {
     const list = pendingRef.current;
     const sameItem = list.find(
@@ -99,10 +101,13 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
     announceScanSuccess(accumulatedQuantity, reagent.unit);
     // Reuse one toast so rapid continuous scans show the accumulated quantity
     // instead of stacking several misleading "×1" messages.
-    toast.success(`已加入 ${reagent.name} ×${accumulatedQuantity}，可继续扫码`, {
-      id: "continuous-scan-feedback",
-      duration: 1400,
-    });
+    toast.success(
+      `${details.fefo ? "按最早效期批次 · " : ""}已加入 ${reagent.name} ×${accumulatedQuantity}，可继续扫码`,
+      {
+        id: "continuous-scan-feedback",
+        duration: 1400,
+      },
+    );
     return true;
   }
 
@@ -117,9 +122,28 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
     setRaw(cleaned);
     const result = matchReagentByScan(cleaned, reagents);
     if (result) {
-      const lot = result.fields.lotNumber || result.reagent.lotNumber || "";
-      const exp = result.fields.expiryDateFormatted || result.reagent.expiryDate || "";
-      const prod = result.fields.productionDateFormatted || result.reagent.productionDate || "";
+      let lot = result.fields.lotNumber || result.reagent.lotNumber || "";
+      let exp = result.fields.expiryDateFormatted || result.reagent.expiryDate || "";
+      let prod = result.fields.productionDateFormatted || result.reagent.productionDate || "";
+      let fefoApplied = false;
+
+      // A GTIN-only scan does not identify a batch. For outbound stock, fill
+      // the missing batch from the earliest available expiry (FEFO) instead of
+      // silently using an arbitrary/default lot.
+      if (
+        tabRef.current === "out" &&
+        !result.fields.lotNumber &&
+        !result.fields.expiryDate &&
+        !result.fields.expiryDateFormatted
+      ) {
+        const batch = chooseFefoBatch(result.reagent, records, pendingRef.current);
+        if (batch) {
+          lot = batch.lotNumber;
+          exp = batch.expiryDate;
+          prod = batch.productionDate;
+          fefoApplied = true;
+        }
+      }
 
       setMatched(result.reagent);
       setFields(result.fields);
@@ -132,7 +156,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
       // Camera and scanner-gun continuous mode: add immediately, merge repeated
       // scans of the same reagent/lot, and leave the input ready for the next scan.
       if (options?.continuous) {
-        if (addContinuousItem(result.reagent, { lotNumber: lot, expiryDate: exp, productionDate: prod })) {
+        if (addContinuousItem(result.reagent, { lotNumber: lot, expiryDate: exp, productionDate: prod, fefo: fefoApplied })) {
           clearMatch();
           window.setTimeout(() => inputRef.current?.focus(), 0);
         }
@@ -224,7 +248,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reagents]);
+  }, [reagents, records]);
 
   const segments = raw ? parseBarcode(raw) : [];
 
@@ -246,6 +270,11 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
             </button>
           ))}
         </div>
+        {tab === "out" ? (
+          <p className="rounded-lg bg-out-soft px-3 py-2 text-xs leading-5 text-out">
+            出库规则：优先选择最早有效期批次（FEFO）；条码包含批号时按条码批次执行。
+          </p>
+        ) : null}
 
         <section className={cn("rounded-xl border border-border bg-surface p-3 shadow-card sm:p-4", flash && "scan-flash")}>
           <Button
