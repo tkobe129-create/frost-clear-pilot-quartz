@@ -11,7 +11,7 @@
     "build": "node scripts/with-app-env.mjs vite build && npm run db:migrate",
     "db:migrate": "node scripts/migrate.mjs",
     "build:dev": "node scripts/with-app-env.mjs vite build --mode development",
-    "build:github": "node scripts/with-app-env.mjs vite build --config vite.github.config.ts && cp dist-github/github-pages.html dist-github/index.html && cp dist-github/github-pages.html dist-github/404.html",
+    "build:github": "node scripts/with-app-env.mjs vite build --config vite.github.config.ts && cp dist-github/github-pages.html dist-github/index.html && cp dist-github/github-pages.html dist-github/404.html && rm dist-github/github-pages.html",
     "preview": "node scripts/with-app-env.mjs vite preview",
     "preview:restart": "node scripts/preview.mjs restart",
     "preview:stop": "node scripts/preview.mjs stop",
