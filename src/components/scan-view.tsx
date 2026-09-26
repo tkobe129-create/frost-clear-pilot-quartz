@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Minus, Plus, Trash2, Volume2 } from "lucide-react";
+import { Minus, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ScannerOverlay } from "@/components/scanner-overlay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { matchReagentByScan, parseBarcode, stripSymbologyId, SUPPORTED_FORMATS } from "@/lib/scanner";
+import { matchReagentByScan, parseBarcode, stripSymbologyId } from "@/lib/scanner";
 import { announceScanSuccess, unlockScanAudio } from "@/lib/scan-feedback";
 import { chooseFefoBatch } from "@/lib/stock-batches";
 import type { ExtractedFields, PendingItem, Reagent, StockRecord, StockType } from "@/lib/types";
@@ -262,7 +262,7 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
               type="button"
               onClick={() => changeTab(id)}
               className={cn(
-                "h-16 rounded-md text-base font-semibold transition-colors sm:h-14",
+                "h-16 rounded-md text-lg font-semibold transition-colors sm:h-14",
                 tab === id ? (id === "in" ? "bg-primary text-primary-fg" : "bg-out text-primary-fg") : "text-muted",
               )}
             >
@@ -277,22 +277,6 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
         ) : null}
 
         <section className={cn("rounded-xl border border-border bg-surface p-3 shadow-card sm:p-4", flash && "scan-flash")}>
-          <p className="text-xs text-subtle">
-            点击上方入库 / 出库按钮即可进入摄像头连续扫码；扫码枪也支持连续扫码，识别成功后自动加入待提交，同种试剂会直接累加数量。
-          </p>
-          <p className="mt-1 break-words text-xs leading-5 text-subtle">{SUPPORTED_FORMATS.join(" · ")}</p>
-          <button
-            type="button"
-            className="mt-2 flex min-h-8 items-center gap-1.5 text-left text-xs text-subtle"
-            onClick={() => {
-              unlockScanAudio();
-              announceScanSuccess(1, "盒");
-            }}
-            aria-label="测试扫码成功播报"
-          >
-            <Volume2 className="size-3.5" />
-            点击测试声音 · 扫码成功会播报“成功扫码 1 盒”
-          </button>
           <Label className="mt-3 block">扫码结果 / 扫码枪输入</Label>
           <Input
             ref={inputRef}
