@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { buildDemoBarcode, matchReagentByScan, parseBarcode, stripSymbologyId, SUPPORTED_FORMATS } from "@/lib/scanner";
-import { announceScanSuccess } from "@/lib/scan-feedback";
+import { announceScanSuccess, unlockScanAudio } from "@/lib/scan-feedback";
 import type { ExtractedFields, PendingItem, Reagent, StockType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -240,7 +240,13 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
         </div>
 
         <section className={cn("rounded-xl border border-border bg-surface p-3 shadow-card sm:p-4", flash && "scan-flash")}>
-          <Button className="h-12 w-full" onClick={() => setCameraOpen(true)}>
+          <Button
+            className="h-12 w-full"
+            onClick={() => {
+              unlockScanAudio();
+              setCameraOpen(true);
+            }}
+          >
             <Camera className="size-4" />
             打开摄像头连续扫码
           </Button>
@@ -248,10 +254,18 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
             摄像头和扫码枪均支持连续扫码：识别成功后自动加入待提交，同种试剂会直接累加数量，无需逐次确认。
           </p>
           <p className="mt-1 break-words text-xs leading-5 text-subtle">{SUPPORTED_FORMATS.join(" · ")}</p>
-          <p className="mt-2 flex items-center gap-1.5 text-xs text-subtle">
+          <button
+            type="button"
+            className="mt-2 flex min-h-8 items-center gap-1.5 text-left text-xs text-subtle"
+            onClick={() => {
+              unlockScanAudio();
+              announceScanSuccess(1, "盒");
+            }}
+            aria-label="测试扫码成功播报"
+          >
             <Volume2 className="size-3.5" />
-            扫码成功会语音播报“成功扫码 1 盒”
-          </p>
+            点击测试声音 · 扫码成功会播报“成功扫码 1 盒”
+          </button>
           <Label className="mt-3 block">扫码结果 / 扫码枪输入</Label>
           <Input
             ref={inputRef}
@@ -265,6 +279,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
+                unlockScanAudio();
                 applyMatch(raw, { continuous: true });
               }
             }}
