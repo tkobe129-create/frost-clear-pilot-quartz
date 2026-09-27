@@ -26,6 +26,8 @@ type Props = {
   children: ReactNode;
   tenantName?: string;
   tenantRole?: TenantRole;
+  userName?: string;
+  userEmail?: string;
   canManageMembers?: boolean;
   onInvite?: () => void;
   onSignOut?: () => void;
@@ -38,6 +40,8 @@ export function AppShell({
   children,
   tenantName = "检验科",
   tenantRole,
+  userName = "",
+  userEmail = "",
   canManageMembers = false,
   onInvite,
   onSignOut,
@@ -84,6 +88,14 @@ export function AppShell({
               <span className="max-w-32 truncate rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted" title={tenantName}>
                 {tenantName}
               </span>
+              {userName || userEmail ? (
+                <span
+                  className="max-w-28 truncate rounded-full border border-primary/30 bg-primary-soft px-2.5 py-1 text-xs font-medium text-primary"
+                  title={userEmail || userName}
+                >
+                  {userName || userEmail}
+                </span>
+              ) : null}
               {tenantRole ? <span className="hidden text-xs text-subtle sm:inline">{tenantRole === "admin" ? "管理员" : "员工"}</span> : null}
               {canManageMembers && onInvite ? (
                 <button

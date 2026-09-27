@@ -13,6 +13,7 @@ export function TenantAuthScreen() {
   const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function submit() {
@@ -20,9 +21,13 @@ export function TenantAuthScreen() {
       toast.error("请输入邮箱和至少 6 位密码");
       return;
     }
+    if (mode === "sign-up" && !name.trim()) {
+      toast.error("请填写姓名，出入库记录会用它标记操作人");
+      return;
+    }
     setBusy(true);
     try {
-      const session = mode === "sign-in" ? await signInWithEmail(email, password) : await signUpWithEmail(email, password);
+      const session = mode === "sign-in" ? await signInWithEmail(email, password) : await signUpWithEmail(email, password, name);
       if (!session) {
         toast.success("注册成功，请先到邮箱完成验证后再登录");
       } else {
@@ -58,6 +63,18 @@ export function TenantAuthScreen() {
           </button>
         </div>
         <div className="mt-4 flex flex-col gap-3">
+          {mode === "sign-up" ? (
+            <label className="text-sm font-medium">
+              姓名
+              <Input
+                className="mt-1"
+                autoComplete="name"
+                placeholder="真实姓名，用于出入库记录"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </label>
+          ) : null}
           <label className="text-sm font-medium">
             邮箱
             <Input className="mt-1" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} />

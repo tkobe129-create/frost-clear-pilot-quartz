@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import type { User } from "@supabase/supabase-js";
 import { toast, Toaster } from "sonner";
 import { TenantAuthScreen, TenantOnboardingScreen } from "@/components/tenant-access";
 import { HomeView } from "@/components/home-view";
@@ -32,6 +33,7 @@ export function GitHubPagesApp() {
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [authReady, setAuthReady] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
   const [membership, setMembership] = useState<TenantMembership | null>(null);
   const [accessLoading, setAccessLoading] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -58,11 +60,13 @@ export function GitHubPagesApp() {
     void supabase.auth.getSession().then(async ({ data }) => {
       if (!active) return;
       setSignedIn(Boolean(data.session));
+      setUser(data.session?.user ?? null);
       if (data.session) await loadMemberships();
       setAuthReady(true);
     });
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
       setSignedIn(Boolean(session));
+      setUser(session?.user ?? null);
       if (session) void loadMemberships();
       else {
         setMembership(null);
@@ -77,6 +81,9 @@ export function GitHubPagesApp() {
 
   const tenantId = membership?.tenant.id ?? null;
   const isAdmin = membership?.role === "admin";
+  const metadata = (user?.user_metadata ?? {}) as Record<string, unknown>;
+  const displayName = typeof metadata.display_name === "string" && metadata.display_name.trim() ? metadata.display_name.trim() : "";
+  const operatorName = displayName || user?.email || "";
 
   const refreshAll = useCallback(async () => {
     if (!tenantId) return;
@@ -112,7 +119,7 @@ export function GitHubPagesApp() {
         productionDate: item.productionDate,
         note: item.note,
       }));
-      const count = await submitGitHubStockBatch(tenantId, type, input);
+      const count = await submitGitHubStockBatch(tenantId, type, input, operatorName);
       await refreshAll();
       toast.success(`已提交 ${count} 条${type === "in" ? "入库" : "出库"}`);
     } catch (error) {
@@ -156,7 +163,7 @@ export function GitHubPagesApp() {
     if (!tenantId || !isAdmin) return;
     setReceivingId(id);
     try {
-      await receiveGitHubOrder(tenantId, id);
+      await receiveGitHubOrder(tenantId, id, operatorName);
       await refreshAll();
       toast.success("到货已入库");
     } catch (error) {
@@ -190,6 +197,8 @@ export function GitHubPagesApp() {
       alertCount={alertCount}
       tenantName={membership.tenant.name}
       tenantRole={membership.role}
+      userName={displayName}
+      userEmail={user?.email ?? ""}
       canManageMembers={isAdmin}
       onInvite={() => void handleInvite()}
       onSignOut={() => void signOutGitHubUser()}

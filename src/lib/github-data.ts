@@ -60,8 +60,12 @@ export async function signInWithEmail(email: string, password: string) {
   return result.data.session;
 }
 
-export async function signUpWithEmail(email: string, password: string) {
-  const result = await supabase.auth.signUp({ email: email.trim(), password });
+export async function signUpWithEmail(email: string, password: string, name?: string) {
+  const result = await supabase.auth.signUp({
+    email: email.trim(),
+    password,
+    options: { data: { display_name: (name ?? "").trim() } },
+  });
   if (result.error) throwError(result.error);
   return result.data.session;
 }
@@ -255,11 +259,16 @@ export async function saveGitHubReagent(tenantId: string, data: SavePayload): Pr
   return fromReagent(result.data as ReagentRow);
 }
 
-export async function submitGitHubStockBatch(tenantId: string, type: StockType, items: ReagentStockItem[]): Promise<number> {
+export async function submitGitHubStockBatch(
+  tenantId: string,
+  type: StockType,
+  items: ReagentStockItem[],
+  operator: string,
+): Promise<number> {
   const { data, error } = await supabase.rpc("submit_stock_batch", {
     p_tenant_id: tenantId,
     p_type: type,
-    p_operator: "检验员",
+    p_operator: operator || "检验员",
     p_department: "检验科",
     p_reason: "",
     p_items: items.map((item) => ({
@@ -299,11 +308,11 @@ export async function createGitHubRestockOrder(tenantId: string): Promise<Purcha
   return found;
 }
 
-export async function receiveGitHubOrder(tenantId: string, id: number): Promise<void> {
+export async function receiveGitHubOrder(tenantId: string, id: number, operator: string): Promise<void> {
   const { error } = await supabase.rpc("receive_purchase_order", {
     p_tenant_id: tenantId,
     p_id: id,
-    p_operator: "检验员",
+    p_operator: operator || "检验员",
   });
   if (error) throwError(error);
 }
