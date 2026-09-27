@@ -276,7 +276,7 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
           </p>
         ) : null}
 
-        <section className={cn("rounded-xl border border-border bg-surface p-3 shadow-card sm:p-4", flash && "scan-flash")}>
+        <section className={cn("hidden rounded-xl border border-border bg-surface p-3 shadow-card md:block md:p-4", flash && "scan-flash")}>
           <Label className="mt-3 block">扫码结果 / 扫码枪输入</Label>
           <Input
             ref={inputRef}
