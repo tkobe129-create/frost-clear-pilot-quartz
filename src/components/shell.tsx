@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { FlaskConical, LayoutDashboard, ScanLine, ScrollText } from "lucide-react";
+import { FlaskConical, LayoutDashboard, LogOut, ScanLine, ScrollText, UserPlus } from "lucide-react";
+import type { TenantRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export type TabId = "home" | "scan" | "reagents" | "records";
@@ -23,9 +24,24 @@ type Props = {
   onTab: (id: TabId) => void;
   alertCount: number;
   children: ReactNode;
+  tenantName?: string;
+  tenantRole?: TenantRole;
+  canManageMembers?: boolean;
+  onInvite?: () => void;
+  onSignOut?: () => void;
 };
 
-export function AppShell({ tab, onTab, alertCount, children }: Props) {
+export function AppShell({
+  tab,
+  onTab,
+  alertCount,
+  children,
+  tenantName = "检验科",
+  tenantRole,
+  canManageMembers = false,
+  onInvite,
+  onSignOut,
+}: Props) {
   return (
     <div className="flex h-dvh max-h-dvh w-full overflow-hidden bg-bg pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       <aside className="hidden h-full w-56 shrink-0 flex-col border-r border-border bg-surface md:flex lg:w-60">
@@ -64,7 +80,34 @@ export function AppShell({ tab, onTab, alertCount, children }: Props) {
                 <span className="hidden md:inline">{TITLES[tab]}</span>
               </h1>
             </div>
-            <span className="rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted">检验科</span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <span className="max-w-32 truncate rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted" title={tenantName}>
+                {tenantName}
+              </span>
+              {tenantRole ? <span className="hidden text-xs text-subtle sm:inline">{tenantRole === "admin" ? "管理员" : "员工"}</span> : null}
+              {canManageMembers && onInvite ? (
+                <button
+                  type="button"
+                  className="flex size-10 items-center justify-center rounded-md text-primary hover:bg-primary-soft"
+                  aria-label="邀请员工"
+                  title="邀请员工"
+                  onClick={onInvite}
+                >
+                  <UserPlus className="size-4" />
+                </button>
+              ) : null}
+              {onSignOut ? (
+                <button
+                  type="button"
+                  className="flex size-10 items-center justify-center rounded-md text-subtle hover:bg-bg-elevated hover:text-fg"
+                  aria-label="退出登录"
+                  title="退出登录"
+                  onClick={onSignOut}
+                >
+                  <LogOut className="size-4" />
+                </button>
+              ) : null}
+            </div>
           </div>
         </header>
 

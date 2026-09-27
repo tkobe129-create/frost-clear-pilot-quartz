@@ -15,6 +15,7 @@ type Props = {
   receivingId: number | null;
   onOrder: () => void;
   onReceive: (id: number) => void;
+  canManagePurchases?: boolean;
   onGoScan: () => void;
   onGoReagents: () => void;
 };
@@ -34,6 +35,7 @@ export function HomeView({
   receivingId,
   onOrder,
   onReceive,
+  canManagePurchases = true,
   onGoScan,
   onGoReagents,
 }: Props) {
@@ -69,14 +71,16 @@ export function HomeView({
             <p className="text-3xl font-semibold tabular tracking-tight">{alerts.length}</p>
             <p className="mt-1 text-sm text-primary-fg/75">条预警待处理</p>
           </div>
-          <Button
-            onClick={onOrder}
-            disabled={ordering || lowCount === 0}
-            className="h-11 w-full bg-surface text-primary hover:bg-bg-elevated disabled:bg-surface/50 sm:w-auto"
-          >
-            <PackagePlus className="size-4" />
-            {ordering ? "生成中…" : "一键下单"}
-          </Button>
+          {canManagePurchases ? (
+            <Button
+              onClick={onOrder}
+              disabled={ordering || lowCount === 0}
+              className="h-11 w-full bg-surface text-primary hover:bg-bg-elevated disabled:bg-surface/50 sm:w-auto"
+            >
+              <PackagePlus className="size-4" />
+              {ordering ? "生成中…" : "一键下单"}
+            </Button>
+          ) : null}
         </div>
         <p className="mt-3 text-xs text-primary-fg/65">
           {lowCount > 0 ? `将按安全库存为 ${lowCount} 项缺货试剂生成采购单` : "暂无低于安全库存的试剂"}
@@ -134,6 +138,7 @@ export function HomeView({
                 onCopy={() => copyOrder(latestOrder)}
                 onExport={() => exportOrder(latestOrder)}
                 onReceive={() => onReceive(latestOrder.id)}
+                canManagePurchases={canManagePurchases}
               />
               {orders.length > 1 ? (
                 <ul className="mt-3 flex flex-col gap-2 border-t border-border pt-3">
@@ -213,12 +218,14 @@ function OrderCard({
   onCopy,
   onExport,
   onReceive,
+  canManagePurchases,
 }: {
   order: PurchaseOrder;
   busy: boolean;
   onCopy: () => void;
   onExport: () => void;
   onReceive: () => void;
+  canManagePurchases: boolean;
 }) {
   return (
     <div>
@@ -246,10 +253,12 @@ function OrderCard({
           <Download className="size-3.5" />
           导出 Excel
         </Button>
-        {order.status === "submitted" ? (
+        {order.status === "submitted" && canManagePurchases ? (
           <Button size="sm" className="h-11 flex-1 sm:h-9" disabled={busy} onClick={onReceive}>
             {busy ? "入库中…" : "确认到货入库"}
           </Button>
+        ) : order.status === "submitted" ? (
+          <span className="flex h-11 flex-1 items-center justify-center text-xs text-muted sm:h-9">待管理员确认到货</span>
         ) : (
           <span className="flex h-11 flex-1 items-center justify-center gap-1 text-xs text-ok sm:h-9">
             <Check className="size-3.5" />

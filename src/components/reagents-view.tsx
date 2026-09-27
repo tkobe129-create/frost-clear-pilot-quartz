@@ -112,10 +112,12 @@ export function ReagentsView({
   reagents,
   saving,
   onSave,
+  canManage = true,
 }: {
   reagents: Reagent[];
   saving: boolean;
   onSave: (data: SavePayload) => Promise<void>;
+  canManage?: boolean;
 }) {
   const [q, setQ] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -327,10 +329,12 @@ export function ReagentsView({
             <h2 className="text-sm font-semibold">试剂分类</h2>
             <p className="mt-0.5 text-xs text-muted">请选择类别查看该组试剂和总库存</p>
           </div>
-          <Button className="shrink-0" onClick={() => setDraft(emptyDraft())}>
-            <Plus className="size-4" />
-            预录
-          </Button>
+          {canManage ? (
+            <Button className="shrink-0" onClick={() => setDraft(emptyDraft())}>
+              <Plus className="size-4" />
+              预录
+            </Button>
+          ) : null}
         </div>
 
         {categorySummaries.length > 0 ? (
@@ -394,10 +398,12 @@ export function ReagentsView({
             {categoryReagents.length} 种试剂 · 库存合计 <strong className="font-semibold text-fg tabular">{selectedTotalStock}</strong>
           </p>
         </div>
-        <Button className="shrink-0" onClick={() => setDraft(emptyDraft())}>
-          <Plus className="size-4" />
-          预录
-        </Button>
+        {canManage ? (
+          <Button className="shrink-0" onClick={() => setDraft(emptyDraft())}>
+            <Plus className="size-4" />
+            预录
+          </Button>
+        ) : null}
       </div>
 
       <div className="relative">
@@ -415,8 +421,14 @@ export function ReagentsView({
             <li key={r.id}>
               <button
                 type="button"
-                onClick={() => setDraft(fromReagent(r))}
-                className="flex w-full items-center gap-3 rounded-xl border border-border bg-surface px-3 py-3 text-left shadow-card"
+                onClick={() => {
+                  if (canManage) setDraft(fromReagent(r));
+                  else toast.info("只有检验科管理员可以编辑试剂资料");
+                }}
+                className={cn(
+                  "flex w-full items-center gap-3 rounded-xl border border-border bg-surface px-3 py-3 text-left shadow-card",
+                  !canManage && "cursor-default",
+                )}
               >
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{r.name}</p>
