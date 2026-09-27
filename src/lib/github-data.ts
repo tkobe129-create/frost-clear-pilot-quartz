@@ -99,6 +99,18 @@ export async function createTenantInvite(tenantId: string): Promise<string> {
   return text(data);
 }
 
+export async function checkPlatformAdmin(): Promise<boolean> {
+  const { data, error } = await supabase.rpc("is_platform_admin");
+  if (error) return false;
+  return Boolean(data);
+}
+
+export async function createPlatformTenant(name: string, code: string): Promise<string> {
+  const { data, error } = await supabase.rpc("create_platform_tenant", { p_name: name, p_code: code });
+  if (error) throwError(error);
+  return text(data);
+}
+
 export async function acceptTenantInvite(code: string): Promise<Tenant> {
   const { data, error } = await supabase.rpc("accept_tenant_invite", { p_code: code });
   if (error) throwError(error);

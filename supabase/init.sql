@@ -17,6 +17,7 @@ drop table if exists public.purchase_order_items cascade;
 drop table if exists public.purchase_orders cascade;
 drop table if exists public.stock_records cascade;
 drop table if exists public.reagents cascade;
+drop table if exists public.platform_admins cascade;
 drop table if exists public.tenant_invites cascade;
 drop table if exists public.tenant_members cascade;
 drop table if exists public.tenants cascade;
@@ -30,8 +31,8 @@ begin
     join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
       and p.proname in (
-        'is_tenant_member', 'is_tenant_admin', 'claim_default_tenant',
-        'create_tenant', 'create_tenant_invite', 'accept_tenant_invite',
+        'is_tenant_member', 'is_tenant_admin', 'is_platform_admin', 'claim_default_tenant',
+        'create_tenant', 'create_platform_tenant', 'create_tenant_invite', 'accept_tenant_invite',
         'submit_stock_batch', 'create_restock_order', 'receive_purchase_order'
       )
   loop
@@ -64,7 +65,7 @@ create table public.tenant_invites (
   id          uuid primary key default gen_random_uuid(),
   tenant_id   uuid not null references public.tenants(id) on delete cascade,
   code        text not null unique,
-  role        text not null default 'employee' check (role = 'employee'),
+  role        text not null default 'employee' check (role in ('admin', 'employee')),
   created_by  uuid not null references auth.users(id) on delete restrict,
   expires_at  timestamptz not null default (now() + interval '7 days'),
   used_by     uuid references auth.users(id) on delete set null,
@@ -72,6 +73,19 @@ create table public.tenant_invites (
   created_at  timestamptz not null default now()
 );
 create index tenant_invites_tenant_idx on public.tenant_invites (tenant_id, created_at desc);
+
+-- 平台管理员：只有这里的账号可以开通新检验科（商用授权入口）。
+create table public.platform_admins (
+  user_id    uuid primary key references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+create or replace function public.is_platform_admin()
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (select 1 from public.platform_admins pa where pa.user_id = auth.uid());
+$$;
 
 -- ── 3) 业务表（自带 tenant_id，从零开始，不含任何测试数据）────────────
 
@@ -222,10 +236,32 @@ begin
   for update;
   if invite_row.id is null then raise exception '邀请码无效或已过期'; end if;
   insert into public.tenant_members (tenant_id, user_id, role)
-  values (invite_row.tenant_id, auth.uid(), 'employee');
+  values (invite_row.tenant_id, auth.uid(), invite_row.role);
   update public.tenant_invites set used_by = auth.uid(), used_at = now() where id = invite_row.id;
   select * into result from public.tenants where id = invite_row.tenant_id;
   return result;
+end;
+$$;
+
+-- 平台管理员开通新检验科：创建租户并返回“开通码”（管理员角色邀请码）。
+create or replace function public.create_platform_tenant(p_name text, p_code text)
+returns text
+language plpgsql security definer set search_path = public
+as $$
+declare
+  new_tenant public.tenants;
+  invite_code text;
+begin
+  if auth.uid() is null then raise exception '请先登录'; end if;
+  if not public.is_platform_admin() then raise exception '只有平台管理员可以开通检验科'; end if;
+  if trim(coalesce(p_name, '')) = '' or trim(coalesce(p_code, '')) = '' then raise exception '检验科名称和编码不能为空'; end if;
+  insert into public.tenants (name, code, created_by)
+  values (trim(p_name), upper(trim(p_code)), auth.uid())
+  returning * into new_tenant;
+  invite_code := upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 10));
+  insert into public.tenant_invites (tenant_id, code, role, created_by)
+  values (new_tenant.id, invite_code, 'admin', auth.uid());
+  return invite_code;
 end;
 $$;
 
@@ -234,10 +270,14 @@ $$;
 alter table public.tenants enable row level security;
 alter table public.tenant_members enable row level security;
 alter table public.tenant_invites enable row level security;
+alter table public.platform_admins enable row level security;
 alter table public.reagents enable row level security;
 alter table public.stock_records enable row level security;
 alter table public.purchase_orders enable row level security;
 alter table public.purchase_order_items enable row level security;
+
+create policy platform_admins_self_select on public.platform_admins
+  for select using (user_id = auth.uid());
 
 create policy tenants_member_select on public.tenants
   for select using (public.is_tenant_member(id));
@@ -265,7 +305,7 @@ create policy purchase_order_items_member_select on public.purchase_order_items
   for select using (public.is_tenant_member(tenant_id));
 
 -- 表级权限：库存记录和采购单只能通过下面的 RPC 写入，员工不能直接改。
-grant select on public.tenants, public.tenant_members, public.tenant_invites to authenticated;
+grant select on public.tenants, public.tenant_members, public.tenant_invites, public.platform_admins to authenticated;
 grant select on public.reagents, public.stock_records, public.purchase_orders, public.purchase_order_items to authenticated;
 grant insert, update, delete on public.reagents to authenticated;
 revoke insert, update, delete on public.stock_records, public.purchase_orders, public.purchase_order_items from anon, authenticated;
@@ -364,8 +404,11 @@ begin
 end;
 $$;
 
-revoke all on function public.create_tenant(text, text) from public;
-grant execute on function public.create_tenant(text, text) to anon, authenticated;
+-- 自助创建检验科不对前端开放：新科室只能通过平台管理员的 create_platform_tenant 开通。
+revoke all on function public.create_tenant(text, text) from public, anon, authenticated;
+revoke all on function public.create_platform_tenant(text, text) from public;
+grant execute on function public.create_platform_tenant(text, text) to authenticated;
+grant execute on function public.is_platform_admin() to authenticated;
 revoke all on function public.create_tenant_invite(uuid) from public;
 grant execute on function public.create_tenant_invite(uuid) to authenticated;
 revoke all on function public.accept_tenant_invite(text) from public;
