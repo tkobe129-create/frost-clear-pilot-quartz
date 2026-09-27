@@ -76,12 +76,6 @@ export async function listMyTenantMemberships(): Promise<TenantMembership[]> {
   });
 }
 
-export async function claimDefaultTenant(): Promise<Tenant> {
-  const { data, error } = await supabase.rpc("claim_default_tenant");
-  if (error) throw error;
-  return fromTenant(data as Record<string, unknown>);
-}
-
 export async function createTenant(name: string, code: string): Promise<Tenant> {
   const { data, error } = await supabase.rpc("create_tenant", { p_name: name, p_code: code });
   if (error) throw error;

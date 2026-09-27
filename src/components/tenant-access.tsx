@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   acceptTenantInvite,
-  claimDefaultTenant,
   createTenant,
   signInWithEmail,
   signUpWithEmail,
@@ -130,14 +129,6 @@ export function TenantOnboardingScreen() {
               创建并成为管理员
             </Button>
           </div>
-          <Button
-            className="mt-3 w-full"
-            variant="outline"
-            disabled={busy}
-            onClick={() => void run(() => claimDefaultTenant(), "已进入演示检验科")}
-          >
-            认领现有演示检验科
-          </Button>
         </div>
 
         <div className="mt-4 rounded-xl border border-border bg-bg-elevated p-4">
