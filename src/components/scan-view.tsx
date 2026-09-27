@@ -31,6 +31,7 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
   const [productionDate, setProductionDate] = useState("");
   const [note, setNote] = useState("");
   const [pending, setPending] = useState<PendingItem[]>([]);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
   const [flash, setFlash] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   // Scans can arrive before React paints the previous result. Keep refs as the
@@ -212,10 +213,36 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
     inputRef.current?.focus();
   }
 
+  function updatePendingItem(key: string, patch: Partial<PendingItem>) {
+    const next = pendingRef.current.map((item) => (item.key === key ? { ...item, ...patch } : item));
+    pendingRef.current = next;
+    setPending(next);
+  }
+
+  function updatePendingQuantity(key: string, rawValue: string) {
+    const item = pendingRef.current.find((entry) => entry.key === key);
+    if (!item) return;
+    const quantity = Math.max(0, Math.floor(Number(rawValue) || 0));
+    if (tabRef.current === "out") {
+      const otherPending = pendingRef.current
+        .filter((entry) => entry.reagentId === item.reagentId && entry.key !== key)
+        .reduce((sum, entry) => sum + entry.quantity, 0);
+      if (quantity + otherPending > item.stockQuantity) {
+        toast.error(`出库数量不能超过库存 · ${item.reagentName}`);
+        return;
+      }
+    }
+    updatePendingItem(key, { quantity });
+  }
+
   async function submit() {
     const items = pendingRef.current;
     if (items.length === 0) {
       toast.error("没有待提交的记录");
+      return;
+    }
+    if (items.some((item) => !Number.isInteger(item.quantity) || item.quantity <= 0)) {
+      toast.error("请把待提交数量修改为大于 0 的整数");
       return;
     }
     const submittedType = tabRef.current;
@@ -383,33 +410,70 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
           <p className="py-5 text-center text-sm text-muted">连续扫码会自动加入，也可手动确认后一次提交</p>
         ) : (
           <ul className="flex flex-col gap-2">
-            {pending.map((p) => (
-              <li key={p.key} className="flex items-center justify-between gap-2 rounded-lg bg-bg-elevated px-3 py-2">
-                <div className="min-w-0">
-                  <p className="truncate text-sm">{p.reagentName}</p>
-                  <p className="text-xs text-subtle">
-                    {p.lotNumber || "无批号"} · {p.expiryDate || "无效期"}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium tabular">
-                    {p.quantity} {p.unit}
-                  </span>
-                  <button
-                    type="button"
-                    className="flex size-11 items-center justify-center text-subtle"
-                    onClick={() => {
-                      const next = pendingRef.current.filter((x) => x.key !== p.key);
-                      pendingRef.current = next;
-                      setPending(next);
-                    }}
-                    aria-label="移除"
-                  >
-                    <Trash2 className="size-4" />
-                  </button>
-                </div>
-              </li>
-            ))}
+            {pending.map((p) => {
+              const editing = editingKey === p.key;
+              return (
+                <li key={p.key} className="rounded-lg bg-bg-elevated px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm">{p.reagentName}</p>
+                      <p className="text-xs text-subtle">
+                        {p.lotNumber || "无批号"} · {p.expiryDate || "无效期"}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <span className="text-sm font-medium tabular">
+                        {p.quantity} {p.unit}
+                      </span>
+                      <button
+                        type="button"
+                        className="min-h-10 rounded-md px-2 text-xs text-primary hover:bg-primary-soft"
+                        onClick={() => setEditingKey(editing ? null : p.key)}
+                      >
+                        {editing ? "收起" : "修改"}
+                      </button>
+                      <button
+                        type="button"
+                        className="flex size-10 items-center justify-center text-subtle"
+                        onClick={() => {
+                          const next = pendingRef.current.filter((x) => x.key !== p.key);
+                          pendingRef.current = next;
+                          setPending(next);
+                          if (editingKey === p.key) setEditingKey(null);
+                        }}
+                        aria-label="移除"
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    </div>
+                  </div>
+                  {editing ? (
+                    <div className="mt-2 grid grid-cols-1 gap-2 border-t border-border/70 pt-2 sm:grid-cols-2">
+                      <PendingField
+                        label={`数量（${p.unit}）`}
+                        value={String(p.quantity)}
+                        inputMode="numeric"
+                        onChange={(value) => updatePendingQuantity(p.key, value)}
+                      />
+                      <PendingField label="批号" value={p.lotNumber} onChange={(value) => updatePendingItem(p.key, { lotNumber: value })} />
+                      <PendingField
+                        label="有效期"
+                        value={p.expiryDate}
+                        placeholder="YYYY-MM-DD"
+                        onChange={(value) => updatePendingItem(p.key, { expiryDate: value })}
+                      />
+                      <PendingField
+                        label="生产日期"
+                        value={p.productionDate}
+                        placeholder="YYYY-MM-DD"
+                        onChange={(value) => updatePendingItem(p.key, { productionDate: value })}
+                      />
+                      <PendingField label="备注" value={p.note} onChange={(value) => updatePendingItem(p.key, { note: value })} />
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         )}
         <Button
@@ -432,6 +496,33 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
           unlockScanAudio();
           applyMatch(code, { continuous: true });
         }}
+      />
+    </div>
+  );
+}
+
+function PendingField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  inputMode,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  inputMode?: "numeric" | "text" | "decimal";
+}) {
+  return (
+    <div className="min-w-0">
+      <Label className="text-xs">{label}</Label>
+      <Input
+        className="mt-1 h-10 text-sm"
+        value={value}
+        placeholder={placeholder}
+        inputMode={inputMode}
+        onChange={(event) => onChange(event.target.value)}
       />
     </div>
   );
