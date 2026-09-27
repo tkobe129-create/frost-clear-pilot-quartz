@@ -24,6 +24,13 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true },
 });
 
+function throwError(error: unknown): never {
+  if (error instanceof Error) throw error;
+  const message =
+    error && typeof error === "object" && "message" in error ? String((error as { message: unknown }).message) : "";
+  throw new Error(message || "操作失败，请稍后再试");
+}
+
 type ReagentRow = Record<string, unknown>;
 type StockRow = Record<string, unknown>;
 type OrderRow = Record<string, unknown>;
@@ -49,26 +56,26 @@ function fromTenant(row: Record<string, unknown>): Tenant {
 
 export async function signInWithEmail(email: string, password: string) {
   const result = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-  if (result.error) throw result.error;
+  if (result.error) throwError(result.error);
   return result.data.session;
 }
 
 export async function signUpWithEmail(email: string, password: string) {
   const result = await supabase.auth.signUp({ email: email.trim(), password });
-  if (result.error) throw result.error;
+  if (result.error) throwError(result.error);
   return result.data.session;
 }
 
 export async function signOutGitHubUser() {
   const result = await supabase.auth.signOut();
-  if (result.error) throw result.error;
+  if (result.error) throwError(result.error);
 }
 
 export async function listMyTenantMemberships(): Promise<TenantMembership[]> {
   const { data, error } = await supabase
     .from("tenant_members")
     .select("role, tenants(id, name, code, status, created_at)");
-  if (error) throw error;
+  if (error) throwError(error);
   return ((data ?? []) as Array<{ role: string; tenants: Record<string, unknown> | Record<string, unknown>[] | null }>).flatMap((row) => {
     const tenant = Array.isArray(row.tenants) ? row.tenants[0] : row.tenants;
     if (!tenant) return [];
@@ -78,19 +85,19 @@ export async function listMyTenantMemberships(): Promise<TenantMembership[]> {
 
 export async function createTenant(name: string, code: string): Promise<Tenant> {
   const { data, error } = await supabase.rpc("create_tenant", { p_name: name, p_code: code });
-  if (error) throw error;
+  if (error) throwError(error);
   return fromTenant(data as Record<string, unknown>);
 }
 
 export async function createTenantInvite(tenantId: string): Promise<string> {
   const { data, error } = await supabase.rpc("create_tenant_invite", { p_tenant_id: tenantId });
-  if (error) throw error;
+  if (error) throwError(error);
   return text(data);
 }
 
 export async function acceptTenantInvite(code: string): Promise<Tenant> {
   const { data, error } = await supabase.rpc("accept_tenant_invite", { p_code: code });
-  if (error) throw error;
+  if (error) throwError(error);
   return fromTenant(data as Record<string, unknown>);
 }
 
@@ -207,7 +214,7 @@ function toReagentFields(data: SavePayload) {
 
 export async function listGitHubReagents(tenantId: string): Promise<Reagent[]> {
   const { data, error } = await supabase.from("reagents").select("*").eq("tenant_id", tenantId).order("id", { ascending: true });
-  if (error) throw error;
+  if (error) throwError(error);
   return ((data ?? []) as ReagentRow[]).map(fromReagent);
 }
 
@@ -219,7 +226,7 @@ export async function listGitHubRecords(tenantId: string): Promise<StockRecord[]
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .limit(200);
-  if (error) throw error;
+  if (error) throwError(error);
   return ((data ?? []) as StockRow[]).map(fromStock);
 }
 
@@ -228,8 +235,8 @@ export async function listGitHubOrders(tenantId: string): Promise<PurchaseOrder[
     supabase.from("purchase_orders").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }).order("id", { ascending: false }),
     supabase.from("purchase_order_items").select("*").eq("tenant_id", tenantId).order("id", { ascending: true }),
   ]);
-  if (orderError) throw orderError;
-  if (itemError) throw itemError;
+  if (orderError) throwError(orderError);
+  if (itemError) throwError(itemError);
   const byOrder = new Map<number, OrderItemRow[]>();
   for (const item of (items ?? []) as OrderItemRow[]) {
     const list = byOrder.get(number(item.order_id)) ?? [];
@@ -244,7 +251,7 @@ export async function saveGitHubReagent(tenantId: string, data: SavePayload): Pr
   const result = data.id
     ? await supabase.from("reagents").update(fields).eq("id", data.id).eq("tenant_id", tenantId).select("*").single()
     : await supabase.from("reagents").insert(fields).select("*").single();
-  if (result.error) throw result.error;
+  if (result.error) throwError(result.error);
   return fromReagent(result.data as ReagentRow);
 }
 
@@ -264,7 +271,7 @@ export async function submitGitHubStockBatch(tenantId: string, type: StockType, 
       note: item.note,
     })),
   });
-  if (error) throw error;
+  if (error) throwError(error);
   return number(data) || items.length;
 }
 
@@ -283,7 +290,7 @@ export async function createGitHubRestockOrder(tenantId: string): Promise<Purcha
     p_tenant_id: tenantId,
     p_note: "一键补货",
   });
-  if (error) throw error;
+  if (error) throwError(error);
   const id = number((data as { id?: number } | null)?.id ?? data);
   if (!id) throw new Error("创建采购单失败");
   const orders = await listGitHubOrders(tenantId);
@@ -298,5 +305,5 @@ export async function receiveGitHubOrder(tenantId: string, id: number): Promise<
     p_id: id,
     p_operator: "检验员",
   });
-  if (error) throw error;
+  if (error) throwError(error);
 }

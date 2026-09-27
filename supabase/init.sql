@@ -198,7 +198,7 @@ declare
   invite_code text;
 begin
   if not public.is_tenant_admin(p_tenant_id) then raise exception '只有检验科管理员可以生成邀请码'; end if;
-  invite_code := upper(substr(encode(gen_random_bytes(6), 'hex'), 1, 10));
+  invite_code := upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 10));
   insert into public.tenant_invites (tenant_id, code, created_by)
   values (p_tenant_id, invite_code, auth.uid());
   return invite_code;
