@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ClipboardCopy } from "lucide-react";
+import { ClipboardCopy, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,7 @@ import {
   checkPlatformAdmin,
   createPlatformTenant,
   signInWithEmail,
+  signOutGitHubUser,
   signUpWithEmail,
 } from "@/lib/github-data";
 
@@ -111,6 +112,7 @@ export function TenantOnboardingScreen() {
   const [labCode, setLabCode] = useState("");
   const [issuing, setIssuing] = useState(false);
   const [issuedCode, setIssuedCode] = useState("");
+  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -123,6 +125,17 @@ export function TenantOnboardingScreen() {
       active = false;
     };
   }, []);
+
+  async function leaveOnboarding() {
+    setSigningOut(true);
+    try {
+      await signOutGitHubUser();
+      toast.success("已退出登录，可以切换其他账号");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "退出登录失败");
+      setSigningOut(false);
+    }
+  }
 
   async function join() {
     setBusy(true);
@@ -165,7 +178,19 @@ export function TenantOnboardingScreen() {
   return (
     <main className="flex min-h-dvh items-center justify-center bg-bg px-4 py-8">
       <section className="w-full max-w-lg rounded-2xl border border-border bg-surface p-6 shadow-card sm:p-8">
-        <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted">检验科设置</p>
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted">检验科设置</p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 shrink-0"
+            disabled={signingOut}
+            onClick={() => void leaveOnboarding()}
+          >
+            <LogOut className="size-3.5" />
+            {signingOut ? "退出中…" : "退出登录"}
+          </Button>
+        </div>
         <h1 className="mt-3 text-2xl font-semibold tracking-tight">加入检验科</h1>
         <p className="mt-2 text-sm text-muted">
           输入邀请码或开通码加入检验科。没有码请联系你的检验科管理员或平台方获取。
