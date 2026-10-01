@@ -15,6 +15,7 @@ import {
   listGitHubOrders,
   listGitHubRecords,
   listGitHubReagents,
+  listGitHubStockBatches,
   listMyTenantMemberships,
   receiveGitHubOrder,
   signOutGitHubUser,
@@ -23,13 +24,14 @@ import {
   supabase,
   type ReagentStockItem,
 } from "@/lib/github-data";
-import type { PendingItem, PurchaseOrder, Reagent, StockRecord, StockType, TenantMembership } from "@/lib/types";
+import type { PendingItem, PurchaseOrder, Reagent, StockBatch, StockRecord, StockType, TenantMembership } from "@/lib/types";
 import "@/styles.css";
 
 export function GitHubPagesApp() {
   const [tab, setTab] = useState<TabId>("home");
   const [reagents, setReagents] = useState<Reagent[]>([]);
   const [records, setRecords] = useState<StockRecord[]>([]);
+  const [stockBatches, setStockBatches] = useState<StockBatch[]>([]);
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [authReady, setAuthReady] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
@@ -87,13 +89,15 @@ export function GitHubPagesApp() {
 
   const refreshAll = useCallback(async () => {
     if (!tenantId) return;
-    const [nextReagents, nextRecords, nextOrders] = await Promise.all([
-      listGitHubReagents(tenantId),
+    const nextReagents = await listGitHubReagents(tenantId);
+    const [nextRecords, nextOrders, nextStockBatches] = await Promise.all([
       listGitHubRecords(tenantId),
       listGitHubOrders(tenantId),
+      listGitHubStockBatches(tenantId, nextReagents),
     ]);
     setReagents(nextReagents);
     setRecords(nextRecords);
+    setStockBatches(nextStockBatches);
     setOrders(nextOrders);
   }, [tenantId]);
 
@@ -221,7 +225,13 @@ export function GitHubPagesApp() {
       ) : null}
 
       {!loading && tab === "scan" ? (
-        <ScanView reagents={reagents} records={records} submitting={submitting} onSubmit={handleSubmit} />
+        <ScanView
+          reagents={reagents}
+          records={records}
+          stockBatches={stockBatches}
+          submitting={submitting}
+          onSubmit={handleSubmit}
+        />
       ) : null}
 
       {!loading && tab === "reagents" ? (

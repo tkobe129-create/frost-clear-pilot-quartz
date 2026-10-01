@@ -1,28 +1,18 @@
-import type { PendingItem, Reagent, StockRecord } from "@/lib/types";
+import type { PendingItem, Reagent, StockBatch, StockRecord } from "@/lib/types";
 
-export type AvailableBatch = {
-  lotNumber: string;
-  expiryDate: string;
-  productionDate: string;
-  quantity: number;
-};
+export type AvailableBatch = Omit<StockBatch, "reagentId">;
 
 function batchKey(lotNumber: string, expiryDate: string, productionDate: string): string {
   return `${lotNumber}\u001f${expiryDate}\u001f${productionDate}`;
 }
 
-/**
- * Reconstructs the currently available quantity for each batch from the stock
- * ledger. The reagent row remains the source of truth for the aggregate stock;
- * the residual is assigned to its current/default batch so opening balances are
- * not lost when older ledger rows are unavailable.
- */
-export function getAvailableBatches(reagent: Reagent, records: StockRecord[]): AvailableBatch[] {
+/** Compatibility fallback for an existing project before the batch-summary SQL patch is applied. */
+export function reconstructAvailableBatches(reagent: Reagent, records: StockRecord[]): StockBatch[] {
   const balances = new Map<string, AvailableBatch>();
   let knownNet = 0;
 
   for (const record of records) {
-    if (record.reagentId !== reagent.id || !record.lotNumber && !record.expiryDate) continue;
+    if (record.reagentId !== reagent.id || (!record.lotNumber && !record.expiryDate)) continue;
     const key = batchKey(record.lotNumber, record.expiryDate, record.productionDate);
     const batch = balances.get(key) ?? {
       lotNumber: record.lotNumber,
@@ -48,6 +38,13 @@ export function getAvailableBatches(reagent: Reagent, records: StockRecord[]): A
 
   return [...balances.values()]
     .filter((batch) => batch.quantity > 0)
+    .map((batch) => ({ ...batch, reagentId: reagent.id }));
+}
+
+export function getAvailableBatches(reagent: Reagent, stockBatches: StockBatch[]): AvailableBatch[] {
+  return stockBatches
+    .filter((batch) => batch.reagentId === reagent.id && batch.quantity > 0)
+    .map(({ lotNumber, expiryDate, productionDate, quantity }) => ({ lotNumber, expiryDate, productionDate, quantity }))
     .sort((a, b) => {
       if (!a.expiryDate && !b.expiryDate) return 0;
       if (!a.expiryDate) return 1;
@@ -58,10 +55,10 @@ export function getAvailableBatches(reagent: Reagent, records: StockRecord[]): A
 
 export function chooseFefoBatch(
   reagent: Reagent,
-  records: StockRecord[],
+  stockBatches: StockBatch[],
   pending: PendingItem[],
 ): AvailableBatch | null {
-  const batches = getAvailableBatches(reagent, records);
+  const batches = getAvailableBatches(reagent, stockBatches);
   const reserved = new Map<string, number>();
   for (const item of pending) {
     if (item.reagentId !== reagent.id) continue;

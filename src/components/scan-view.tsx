@@ -8,18 +8,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { matchReagentByScan, parseBarcode, stripSymbologyId } from "@/lib/scanner";
 import { announceScanSuccess, unlockScanAudio } from "@/lib/scan-feedback";
-import { chooseFefoBatch } from "@/lib/stock-batches";
-import type { ExtractedFields, PendingItem, Reagent, StockRecord, StockType } from "@/lib/types";
+import { chooseFefoBatch, reconstructAvailableBatches } from "@/lib/stock-batches";
+import type { ExtractedFields, PendingItem, Reagent, StockBatch, StockRecord, StockType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Props = {
   reagents: Reagent[];
   records: StockRecord[];
+  stockBatches?: StockBatch[];
   submitting: boolean;
   onSubmit: (type: StockType, items: PendingItem[]) => Promise<void>;
 };
 
-export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
+export function ScanView({ reagents, records, stockBatches, submitting, onSubmit }: Props) {
+  const fefoBatches = stockBatches ?? reagents.flatMap((reagent) => reconstructAvailableBatches(reagent, records));
   const [tab, setTab] = useState<StockType>("in");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [raw, setRaw] = useState("");
@@ -136,7 +138,7 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
         !result.fields.expiryDate &&
         !result.fields.expiryDateFormatted
       ) {
-        const batch = chooseFefoBatch(result.reagent, records, pendingRef.current);
+        const batch = chooseFefoBatch(result.reagent, fefoBatches, pendingRef.current);
         if (batch) {
           lot = batch.lotNumber;
           exp = batch.expiryDate;
@@ -270,7 +272,7 @@ export function ScanView({ reagents, records, submitting, onSubmit }: Props) {
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reagents, records]);
+  }, [reagents, records, stockBatches]);
 
   const segments = raw ? parseBarcode(raw) : [];
 

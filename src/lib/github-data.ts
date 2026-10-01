@@ -3,6 +3,7 @@ import type {
   PurchaseOrder,
   PurchaseOrderItem,
   Reagent,
+  StockBatch,
   StockRecord,
   StockType,
   Tenant,
@@ -10,6 +11,7 @@ import type {
   TenantRole,
 } from "@/lib/types";
 import type { SavePayload } from "@/components/reagents-view";
+import { reconstructAvailableBatches } from "@/lib/stock-batches";
 
 /**
  * GitHub Pages has no server runtime, so the static build talks to the same
@@ -244,6 +246,43 @@ export async function listGitHubRecords(tenantId: string): Promise<StockRecord[]
     .limit(200);
   if (error) throwError(error);
   return ((data ?? []) as StockRow[]).map(fromStock);
+}
+
+async function listAllGitHubStockRecords(tenantId: string): Promise<StockRecord[]> {
+  const pageSize = 500;
+  const records: StockRecord[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from("stock_records")
+      .select("*, reagents(name)")
+      .eq("tenant_id", tenantId)
+      .order("id", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error) throwError(error);
+    const page = ((data ?? []) as StockRow[]).map(fromStock);
+    records.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return records;
+}
+
+export async function listGitHubStockBatches(tenantId: string, reagents: Reagent[]): Promise<StockBatch[]> {
+  const { data, error } = await supabase.rpc("list_available_stock_batches", { p_tenant_id: tenantId });
+  if (!error) {
+    return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+      reagentId: number(row.reagent_id),
+      lotNumber: text(row.lot_number),
+      expiryDate: text(row.expiry_date),
+      productionDate: text(row.production_date),
+      quantity: number(row.quantity),
+    }));
+  }
+
+  // Compatibility during deployment: until the SQL patch is installed, read
+  // the complete paginated ledger instead of using the recent 200-row window.
+  if (error.code !== "PGRST202" && error.code !== "42883") throwError(error);
+  const records = await listAllGitHubStockRecords(tenantId);
+  return reagents.flatMap((reagent) => reconstructAvailableBatches(reagent, records));
 }
 
 export async function listGitHubOrders(tenantId: string): Promise<PurchaseOrder[]> {

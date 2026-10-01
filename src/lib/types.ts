@@ -58,6 +58,14 @@ export type ExtractedFields = {
   quantity?: string;
 };
 
+export type StockBatch = {
+  reagentId: number;
+  lotNumber: string;
+  expiryDate: string;
+  productionDate: string;
+  quantity: number;
+};
+
 export type StockRecord = {
   id: number;
   reagentId: number;
