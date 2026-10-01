@@ -141,7 +141,7 @@ export function GitHubPagesApp() {
     if (!tenantId) return;
     setSaving(true);
     try {
-      await saveGitHubReagent(tenantId, data);
+      await saveGitHubReagent(tenantId, data, operatorName);
       await refreshAll();
       toast.success("试剂已保存");
     } catch (error) {

@@ -184,6 +184,11 @@ export function ReagentsView({
       toast.error("请填写 GTIN 和试剂名称");
       return;
     }
+    const openingStock = Number(draft.stockQuantity);
+    if (!draft.id && (!Number.isSafeInteger(openingStock) || openingStock < 0)) {
+      toast.error("期初库存必须是大于或等于 0 的整数");
+      return;
+    }
     let scanSegments: Reagent["scanSegments"] = [];
     try {
       scanSegments = JSON.parse(draft.scanSegmentsText || "[]") as Reagent["scanSegments"];
@@ -199,7 +204,7 @@ export function ReagentsView({
       specification: draft.specification,
       manufacturer: draft.manufacturer,
       unit: draft.unit,
-      stockQuantity: Number(draft.stockQuantity) || 0,
+      stockQuantity: draft.id ? 0 : openingStock,
       minStock: Number(draft.minStock) || 0,
       storageCondition: draft.storageCondition,
       location: draft.location,
@@ -248,12 +253,22 @@ export function ReagentsView({
           />
           <Field label="规格" value={draft.specification} onChange={(v) => setDraft({ ...draft, specification: v })} />
           <Field label="厂家" value={draft.manufacturer} onChange={(v) => setDraft({ ...draft, manufacturer: v })} />
-          <Field
-            label="当前库存"
-            value={draft.stockQuantity}
-            onChange={(v) => setDraft({ ...draft, stockQuantity: v })}
-            inputMode="numeric"
-          />
+          {draft.id ? (
+            <div className="min-w-0">
+              <Label>当前库存（只读）</Label>
+              <div className="mt-1 flex h-11 items-center rounded-md border border-border bg-bg-elevated px-3 text-sm tabular">
+                {draft.stockQuantity}
+              </div>
+              <p className="mt-1 text-xs leading-5 text-muted">库存变化请通过入库或出库操作调整，系统会保留记录。</p>
+            </div>
+          ) : (
+            <Field
+              label="期初库存"
+              value={draft.stockQuantity}
+              onChange={(v) => setDraft({ ...draft, stockQuantity: v })}
+              inputMode="numeric"
+            />
+          )}
           <Field
             label="安全库存"
             value={draft.minStock}

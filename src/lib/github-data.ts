@@ -213,7 +213,6 @@ function toReagentFields(data: SavePayload) {
     specification: data.specification,
     manufacturer: data.manufacturer,
     unit: data.unit,
-    stock_quantity: data.stockQuantity,
     min_stock: data.minStock,
     storage_condition: data.storageCondition,
     location: data.location,
@@ -340,13 +339,16 @@ export async function listGitHubOrders(tenantId: string): Promise<PurchaseOrder[
   return (await listGitHubOrdersPage(tenantId, 0, 4)).orders;
 }
 
-export async function saveGitHubReagent(tenantId: string, data: SavePayload): Promise<Reagent> {
-  const fields = { ...toReagentFields(data), tenant_id: tenantId };
-  const result = data.id
-    ? await supabase.from("reagents").update(fields).eq("id", data.id).eq("tenant_id", tenantId).select("*").single()
-    : await supabase.from("reagents").insert(fields).select("*").single();
-  if (result.error) throwError(result.error);
-  return fromReagent(result.data as ReagentRow);
+export async function saveGitHubReagent(tenantId: string, data: SavePayload, operator: string): Promise<Reagent> {
+  const { data: result, error } = await supabase.rpc("save_reagent", {
+    p_tenant_id: tenantId,
+    p_id: data.id ?? null,
+    p_reagent: toReagentFields(data),
+    p_initial_stock: data.id ? 0 : data.stockQuantity,
+    p_operator: operator || "管理员",
+  });
+  if (error) throwError(error);
+  return fromReagent(result as ReagentRow);
 }
 
 export async function submitGitHubStockBatch(
