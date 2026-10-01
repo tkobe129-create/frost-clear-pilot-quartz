@@ -113,6 +113,20 @@ export async function createPlatformTenant(name: string, code: string): Promise<
   return text(data);
 }
 
+export async function listPlatformTenants(): Promise<Tenant[]> {
+  const { data, error } = await supabase.rpc("list_platform_tenants");
+  if (error) throwError(error);
+  return ((data ?? []) as Array<Record<string, unknown>>).map(fromTenant);
+}
+
+export async function setPlatformTenantStatus(tenantId: string, status: Tenant["status"]): Promise<void> {
+  const { error } = await supabase.rpc("set_platform_tenant_status", {
+    p_tenant_id: tenantId,
+    p_status: status,
+  });
+  if (error) throwError(error);
+}
+
 export async function acceptTenantInvite(code: string): Promise<Tenant> {
   const { data, error } = await supabase.rpc("accept_tenant_invite", { p_code: code });
   if (error) throwError(error);

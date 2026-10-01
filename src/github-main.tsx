@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { User } from "@supabase/supabase-js";
 import { toast, Toaster } from "sonner";
-import { TenantAuthScreen, TenantOnboardingScreen } from "@/components/tenant-access";
+import { TenantAuthScreen, TenantDisabledScreen, TenantOnboardingScreen } from "@/components/tenant-access";
 import { HomeView } from "@/components/home-view";
 import { RecordsView } from "@/components/records-view";
 import { ReagentsView, type SavePayload } from "@/components/reagents-view";
@@ -59,6 +59,27 @@ export function GitHubPagesApp() {
     }
   }, []);
 
+  const membershipTenantId = membership?.tenant.id;
+  const membershipTenantStatus = membership?.tenant.status;
+
+  useEffect(() => {
+    if (!signedIn || !membershipTenantId || membershipTenantStatus !== "active") return;
+    let active = true;
+    const refreshAccess = async () => {
+      try {
+        const next = await listMyTenantMemberships();
+        if (active) setMembership(next[0] ?? null);
+      } catch {
+        // RLS still blocks tenant data immediately; the next refresh will update the UI state.
+      }
+    };
+    const timer = window.setInterval(() => void refreshAccess(), 30_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [membershipTenantId, membershipTenantStatus, signedIn]);
+
   useEffect(() => {
     let active = true;
     void supabase.auth.getSession().then(async ({ data }) => {
@@ -105,13 +126,17 @@ export function GitHubPagesApp() {
   }, [tenantId]);
 
   useEffect(() => {
-    if (!tenantId) {
+    if (!tenantId || membership?.tenant.status !== "active") {
       setLoading(false);
+      setReagents([]);
+      setRecords([]);
+      setStockBatches([]);
+      setOrders([]);
       return;
     }
     setLoading(true);
     void refreshAll().finally(() => setLoading(false));
-  }, [refreshAll, tenantId]);
+  }, [membership?.tenant.status, refreshAll, tenantId]);
 
   async function handleSubmit(type: StockType, items: PendingItem[]) {
     if (!tenantId) return;
@@ -211,6 +236,7 @@ export function GitHubPagesApp() {
   if (!signedIn) return <TenantAuthScreen />;
   if (accessLoading) return <p className="min-h-dvh bg-bg p-8 text-center text-sm text-muted">正在读取检验科信息…</p>;
   if (!membership) return <TenantOnboardingScreen />;
+  if (membership.tenant.status === "disabled") return <TenantDisabledScreen tenantName={membership.tenant.name} />;
 
   const alertCount = computeAlerts(reagents).length;
 

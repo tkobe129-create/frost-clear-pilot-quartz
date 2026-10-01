@@ -3,10 +3,13 @@ import { ClipboardCopy, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { Tenant } from "@/lib/types";
 import {
   acceptTenantInvite,
   checkPlatformAdmin,
   createPlatformTenant,
+  listPlatformTenants,
+  setPlatformTenantStatus,
   signInWithEmail,
   signOutGitHubUser,
   signUpWithEmail,
@@ -113,6 +116,9 @@ export function TenantOnboardingScreen() {
   const [issuing, setIssuing] = useState(false);
   const [issuedCode, setIssuedCode] = useState("");
   const [signingOut, setSigningOut] = useState(false);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [loadingTenants, setLoadingTenants] = useState(false);
+  const [statusBusyId, setStatusBusyId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -125,6 +131,25 @@ export function TenantOnboardingScreen() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isPlatformAdmin) return;
+    let active = true;
+    setLoadingTenants(true);
+    listPlatformTenants()
+      .then((items) => {
+        if (active) setTenants(items);
+      })
+      .catch((error) => {
+        if (active) toast.error(error instanceof Error ? error.message : "读取科室列表失败");
+      })
+      .finally(() => {
+        if (active) setLoadingTenants(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isPlatformAdmin]);
 
   async function leaveOnboarding() {
     setSigningOut(true);
@@ -150,12 +175,27 @@ export function TenantOnboardingScreen() {
     }
   }
 
+  async function toggleTenantStatus(tenant: Tenant) {
+    const status = tenant.status === "active" ? "disabled" : "active";
+    setStatusBusyId(tenant.id);
+    try {
+      await setPlatformTenantStatus(tenant.id, status);
+      setTenants((current) => current.map((item) => (item.id === tenant.id ? { ...item, status } : item)));
+      toast.success(status === "disabled" ? `已停用「${tenant.name}」` : `已恢复「${tenant.name}」`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更改科室状态失败");
+    } finally {
+      setStatusBusyId(null);
+    }
+  }
+
   async function issueTenant() {
     if (!labName.trim() || !labCode.trim()) return;
     setIssuing(true);
     try {
       const invite = await createPlatformTenant(labName, labCode);
       setIssuedCode(invite);
+      void listPlatformTenants().then(setTenants).catch(() => undefined);
       setLabName("");
       setLabCode("");
       toast.success("已开通新检验科，把开通码发给客户的第一个管理员");
@@ -237,8 +277,74 @@ export function TenantOnboardingScreen() {
                 </Button>
               </div>
             ) : null}
+            <div className="mt-5 border-t border-primary/20 pt-4">
+              <h3 className="text-sm font-semibold">已开通检验科</h3>
+              <p className="mt-1 text-xs leading-5 text-muted">停用后该科室成员将无法读取或修改科室数据；重新启用后可恢复访问。</p>
+              {loadingTenants ? (
+                <p className="py-5 text-center text-sm text-muted">正在读取科室列表…</p>
+              ) : tenants.length > 0 ? (
+                <ul className="mt-3 flex flex-col gap-2">
+                  {tenants.map((tenant) => (
+                    <li key={tenant.id} className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">{tenant.name}</p>
+                        <p className="mt-0.5 truncate text-xs text-muted">{tenant.code}</p>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-1 text-xs ${
+                          tenant.status === "active" ? "bg-primary-soft text-primary" : "bg-bg-elevated text-muted"
+                        }`}
+                      >
+                        {tenant.status === "active" ? "运行中" : "已停用"}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-9 shrink-0"
+                        disabled={statusBusyId === tenant.id}
+                        onClick={() => void toggleTenantStatus(tenant)}
+                      >
+                        {statusBusyId === tenant.id ? "处理中…" : tenant.status === "active" ? "停用" : "重新启用"}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="py-5 text-center text-sm text-muted">暂无已开通检验科</p>
+              )}
+            </div>
           </div>
         ) : null}
+      </section>
+    </main>
+  );
+}
+
+export function TenantDisabledScreen({ tenantName }: { tenantName: string }) {
+  const [signingOut, setSigningOut] = useState(false);
+
+  async function leave() {
+    setSigningOut(true);
+    try {
+      await signOutGitHubUser();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "退出登录失败");
+      setSigningOut(false);
+    }
+  }
+
+  return (
+    <main className="flex min-h-dvh items-center justify-center bg-bg px-4 py-8">
+      <section className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 text-center shadow-card sm:p-8">
+        <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted">检验科访问受限</p>
+        <h1 className="mt-3 text-2xl font-semibold tracking-tight">该检验科目前已停用</h1>
+        <p className="mt-2 text-sm text-muted">
+          「{tenantName}」已暂停使用。该科室数据暂不可读取或修改；如需恢复，请联系平台管理员。
+        </p>
+        <Button variant="outline" className="mt-6" disabled={signingOut} onClick={() => void leave()}>
+          <LogOut className="size-4" />
+          {signingOut ? "退出中…" : "退出登录"}
+        </Button>
       </section>
     </main>
   );

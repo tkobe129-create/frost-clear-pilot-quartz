@@ -33,7 +33,8 @@ begin
       and p.proname in (
         'is_tenant_member', 'is_tenant_admin', 'is_platform_admin', 'claim_default_tenant',
         'create_tenant', 'create_platform_tenant', 'create_tenant_invite', 'accept_tenant_invite',
-        'submit_stock_batch', 'create_restock_order', 'receive_purchase_order', 'save_reagent'
+        'submit_stock_batch', 'create_restock_order', 'receive_purchase_order', 'save_reagent',
+        'list_platform_tenants', 'set_platform_tenant_status'
       )
   loop
     execute format('drop function %s cascade', fn.signature);
@@ -167,8 +168,10 @@ returns boolean
 language sql stable security definer set search_path = public
 as $$
   select exists (
-    select 1 from public.tenant_members m
-    where m.tenant_id = p_tenant_id and m.user_id = auth.uid()
+    select 1
+    from public.tenant_members m
+    join public.tenants t on t.id = m.tenant_id
+    where m.tenant_id = p_tenant_id and m.user_id = auth.uid() and t.status = 'active'
   );
 $$;
 
@@ -177,8 +180,10 @@ returns boolean
 language sql stable security definer set search_path = public
 as $$
   select exists (
-    select 1 from public.tenant_members m
-    where m.tenant_id = p_tenant_id and m.user_id = auth.uid() and m.role = 'admin'
+    select 1
+    from public.tenant_members m
+    join public.tenants t on t.id = m.tenant_id
+    where m.tenant_id = p_tenant_id and m.user_id = auth.uid() and m.role = 'admin' and t.status = 'active'
   );
 $$;
 
@@ -237,6 +242,9 @@ begin
   where code = upper(trim(p_code)) and used_by is null and expires_at > now()
   for update;
   if invite_row.id is null then raise exception '邀请码无效或已过期'; end if;
+  if not exists (select 1 from public.tenants where id = invite_row.tenant_id and status = 'active') then
+    raise exception '该检验科已停用，暂时无法加入';
+  end if;
   begin
     insert into public.tenant_members (tenant_id, user_id, role)
     values (invite_row.tenant_id, auth.uid(), invite_row.role);
@@ -271,6 +279,32 @@ begin
 end;
 $$;
 
+-- 平台管理员查询与停用/恢复检验科；停用后 is_tenant_member/admin 均返回 false.
+create or replace function public.list_platform_tenants()
+returns table (id uuid, name text, code text, status text, created_at timestamptz)
+language plpgsql stable security definer set search_path = public
+as $$
+begin
+  if not public.is_platform_admin() then raise exception '只有平台管理员可以查看检验科列表'; end if;
+  return query
+    select t.id, t.name, t.code, t.status, t.created_at
+    from public.tenants t
+    order by t.created_at desc, t.id;
+end;
+$$;
+
+create or replace function public.set_platform_tenant_status(p_tenant_id uuid, p_status text)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if not public.is_platform_admin() then raise exception '只有平台管理员可以更改检验科状态'; end if;
+  if p_status is null or p_status not in ('active', 'disabled') then raise exception '无效的检验科状态'; end if;
+  update public.tenants set status = p_status where id = p_tenant_id;
+  if not found then raise exception '检验科不存在'; end if;
+end;
+$$;
+
 -- ── 6) 行级安全（RLS）：只能访问所属检验科的数据 ─────────────────────
 
 alter table public.tenants enable row level security;
@@ -285,8 +319,11 @@ alter table public.purchase_order_items enable row level security;
 create policy platform_admins_self_select on public.platform_admins
   for select using (user_id = auth.uid());
 
+-- Members may read their own tenant status even while disabled, but tenant data policies use the active-only membership helper.
 create policy tenants_member_select on public.tenants
-  for select using (public.is_tenant_member(id));
+  for select using (exists (
+    select 1 from public.tenant_members m where m.tenant_id = id and m.user_id = auth.uid()
+  ));
 
 create policy tenant_members_self_or_admin_select on public.tenant_members
   for select using (user_id = auth.uid() or public.is_tenant_admin(tenant_id));
@@ -615,6 +652,10 @@ $$;
 revoke all on function public.create_tenant(text, text) from public, anon, authenticated;
 revoke all on function public.create_platform_tenant(text, text) from public;
 grant execute on function public.create_platform_tenant(text, text) to authenticated;
+revoke all on function public.list_platform_tenants() from public, anon;
+grant execute on function public.list_platform_tenants() to authenticated;
+revoke all on function public.set_platform_tenant_status(uuid, text) from public, anon;
+grant execute on function public.set_platform_tenant_status(uuid, text) to authenticated;
 grant execute on function public.is_platform_admin() to authenticated;
 revoke all on function public.create_tenant_invite(uuid) from public;
 grant execute on function public.create_tenant_invite(uuid) to authenticated;
