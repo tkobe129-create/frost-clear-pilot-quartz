@@ -59,7 +59,8 @@ create table public.tenant_members (
   created_at timestamptz not null default now(),
   primary key (tenant_id, user_id)
 );
-create index tenant_members_user_idx on public.tenant_members (user_id);
+-- Enforce the one-account-one-lab rule in the database, including concurrent invite claims.
+create unique index tenant_members_one_tenant_per_user_idx on public.tenant_members (user_id);
 
 create table public.tenant_invites (
   id          uuid primary key default gen_random_uuid(),
@@ -235,8 +236,12 @@ begin
   where code = upper(trim(p_code)) and used_by is null and expires_at > now()
   for update;
   if invite_row.id is null then raise exception '邀请码无效或已过期'; end if;
-  insert into public.tenant_members (tenant_id, user_id, role)
-  values (invite_row.tenant_id, auth.uid(), invite_row.role);
+  begin
+    insert into public.tenant_members (tenant_id, user_id, role)
+    values (invite_row.tenant_id, auth.uid(), invite_row.role);
+  exception when unique_violation then
+    raise exception '该账号已经加入其他检验科或该邀请码已被使用';
+  end;
   update public.tenant_invites set used_by = auth.uid(), used_at = now() where id = invite_row.id;
   select * into result from public.tenants where id = invite_row.tenant_id;
   return result;
