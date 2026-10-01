@@ -229,19 +229,22 @@ export function GitHubPagesApp() {
       ) : null}
 
       {!loading && tab === "records" ? <RecordsView records={records} /> : null}
-
-      <Toaster
-        position="top-center"
-        richColors={false}
-        toastOptions={{
-          className: "font-sans",
-          style: { background: "#fffcf7", color: "#1c1d1a", border: "1px solid #d8d3c8" },
-        }}
-      />
     </AppShell>
   );
 }
 
 const root = document.getElementById("root");
 if (!root) throw new Error("GitHub Pages root element not found");
-createRoot(root).render(<GitHubPagesApp />);
+createRoot(root).render(
+  <>
+    <GitHubPagesApp />
+    <Toaster
+      position="top-center"
+      richColors={false}
+      toastOptions={{
+        className: "font-sans",
+        style: { background: "#fffcf7", color: "#1c1d1a", border: "1px solid #d8d3c8" },
+      }}
+    />
+  </>,
+);
