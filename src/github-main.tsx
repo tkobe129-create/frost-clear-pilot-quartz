@@ -12,7 +12,7 @@ import { computeAlerts } from "@/lib/alerts";
 import {
   createGitHubRestockOrder,
   createTenantInvite,
-  listGitHubOrders,
+  listGitHubOrdersPage,
   listGitHubRecords,
   listGitHubReagents,
   listGitHubStockBatches,
@@ -33,6 +33,8 @@ export function GitHubPagesApp() {
   const [records, setRecords] = useState<StockRecord[]>([]);
   const [stockBatches, setStockBatches] = useState<StockBatch[]>([]);
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
+  const [hasMoreOrders, setHasMoreOrders] = useState(false);
+  const [loadingMoreOrders, setLoadingMoreOrders] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [user, setUser] = useState<User | null>(null);
@@ -90,15 +92,16 @@ export function GitHubPagesApp() {
   const refreshAll = useCallback(async () => {
     if (!tenantId) return;
     const nextReagents = await listGitHubReagents(tenantId);
-    const [nextRecords, nextOrders, nextStockBatches] = await Promise.all([
+    const [nextRecords, orderPage, nextStockBatches] = await Promise.all([
       listGitHubRecords(tenantId),
-      listGitHubOrders(tenantId),
+      listGitHubOrdersPage(tenantId),
       listGitHubStockBatches(tenantId, nextReagents),
     ]);
     setReagents(nextReagents);
     setRecords(nextRecords);
     setStockBatches(nextStockBatches);
-    setOrders(nextOrders);
+    setOrders(orderPage.orders);
+    setHasMoreOrders(orderPage.hasMore);
   }, [tenantId]);
 
   useEffect(() => {
@@ -187,6 +190,23 @@ export function GitHubPagesApp() {
     }
   }
 
+  async function handleLoadMoreOrders() {
+    if (!tenantId || !hasMoreOrders || loadingMoreOrders) return;
+    setLoadingMoreOrders(true);
+    try {
+      const page = await listGitHubOrdersPage(tenantId, orders.length);
+      setOrders((current) => {
+        const knownIds = new Set(current.map((order) => order.id));
+        return [...current, ...page.orders.filter((order) => !knownIds.has(order.id))];
+      });
+      setHasMoreOrders(page.hasMore);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "读取更早采购单失败");
+    } finally {
+      setLoadingMoreOrders(false);
+    }
+  }
+
   if (!authReady) return <p className="min-h-dvh bg-bg p-8 text-center text-sm text-muted">正在检查登录状态…</p>;
   if (!signedIn) return <TenantAuthScreen />;
   if (accessLoading) return <p className="min-h-dvh bg-bg p-8 text-center text-sm text-muted">正在读取检验科信息…</p>;
@@ -214,6 +234,9 @@ export function GitHubPagesApp() {
           reagents={reagents}
           records={records}
           orders={orders}
+          hasMoreOrders={hasMoreOrders}
+          loadingMoreOrders={loadingMoreOrders}
+          onLoadMoreOrders={() => void handleLoadMoreOrders()}
           ordering={ordering}
           receivingId={receivingId}
           onOrder={() => void handleOrder()}

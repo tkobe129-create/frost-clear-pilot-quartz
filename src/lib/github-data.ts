@@ -285,37 +285,43 @@ export async function listGitHubStockBatches(tenantId: string, reagents: Reagent
   return reagents.flatMap((reagent) => reconstructAvailableBatches(reagent, records));
 }
 
-export async function listGitHubOrders(tenantId: string): Promise<PurchaseOrder[]> {
-  // The home screen shows the latest order and three recent summaries only.
-  // Fetch just those order headers rather than scanning the tenant's full history.
+export async function listGitHubOrdersPage(
+  tenantId: string,
+  offset = 0,
+  pageSize = 10,
+): Promise<{ orders: PurchaseOrder[]; hasMore: boolean }> {
   const { data: orders, error: orderError } = await supabase
     .from("purchase_orders")
     .select("*")
     .eq("tenant_id", tenantId)
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
-    .limit(4);
+    // Read one extra header to determine whether another page exists.
+    .range(offset, offset + pageSize);
   if (orderError) throwError(orderError);
-  const orderRows = (orders ?? []) as OrderRow[];
-  if (orderRows.length === 0) return [];
 
-  // Fetch line items only for the displayed orders, in bounded pages so an
-  // unusually large purchase order cannot be silently truncated by PostgREST.
+  const fetchedRows = (orders ?? []) as OrderRow[];
+  const hasMore = fetchedRows.length > pageSize;
+  const orderRows = fetchedRows.slice(0, pageSize);
+  if (orderRows.length === 0) return { orders: [], hasMore: false };
+
+  // Fetch details only for this page's orders. Page through line items as well,
+  // so a large order cannot be silently truncated by PostgREST's row cap.
   const orderIds = orderRows.map((row) => number(row.id));
-  const pageSize = 500;
+  const itemPageSize = 500;
   const items: OrderItemRow[] = [];
-  for (let offset = 0; ; offset += pageSize) {
+  for (let itemOffset = 0; ; itemOffset += itemPageSize) {
     const { data, error } = await supabase
       .from("purchase_order_items")
       .select("*")
       .eq("tenant_id", tenantId)
       .in("order_id", orderIds)
       .order("id", { ascending: true })
-      .range(offset, offset + pageSize - 1);
+      .range(itemOffset, itemOffset + itemPageSize - 1);
     if (error) throwError(error);
     const page = (data ?? []) as OrderItemRow[];
     items.push(...page);
-    if (page.length < pageSize) break;
+    if (page.length < itemPageSize) break;
   }
 
   const byOrder = new Map<number, OrderItemRow[]>();
@@ -324,7 +330,14 @@ export async function listGitHubOrders(tenantId: string): Promise<PurchaseOrder[
     list.push(item);
     byOrder.set(number(item.order_id), list);
   }
-  return orderRows.map((row) => fromOrder(row, byOrder.get(number(row.id)) ?? []));
+  return {
+    orders: orderRows.map((row) => fromOrder(row, byOrder.get(number(row.id)) ?? [])),
+    hasMore,
+  };
+}
+
+export async function listGitHubOrders(tenantId: string): Promise<PurchaseOrder[]> {
+  return (await listGitHubOrdersPage(tenantId, 0, 4)).orders;
 }
 
 export async function saveGitHubReagent(tenantId: string, data: SavePayload): Promise<Reagent> {

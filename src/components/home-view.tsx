@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Check, ClipboardCopy, Download, PackagePlus, Truck } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +12,9 @@ type Props = {
   reagents: Reagent[];
   records: StockRecord[];
   orders: PurchaseOrder[];
+  hasMoreOrders?: boolean;
+  loadingMoreOrders?: boolean;
+  onLoadMoreOrders?: () => void;
   ordering: boolean;
   receivingId: number | null;
   onOrder: () => void;
@@ -31,6 +35,9 @@ export function HomeView({
   reagents,
   records,
   orders,
+  hasMoreOrders = false,
+  loadingMoreOrders = false,
+  onLoadMoreOrders,
   ordering,
   receivingId,
   onOrder,
@@ -43,6 +50,8 @@ export function HomeView({
   const lowCount = reagents.filter((r) => r.minStock > 0 && r.stockQuantity <= r.minStock).length;
   const totalStock = reagents.reduce((s, r) => s + r.stockQuantity, 0);
   const latestOrder = orders[0];
+  const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
+  const displayedOrder = orders.find((order) => order.id === selectedOrderId) ?? latestOrder;
 
   async function copyOrder(order: PurchaseOrder) {
     try {
@@ -129,28 +138,52 @@ export function HomeView({
           {latestOrder ? (
             <section className="rounded-xl border border-border bg-surface p-3 shadow-card sm:p-4">
               <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-sm font-semibold">最近采购单</h2>
-                <span className="text-xs text-subtle">#{latestOrder.id}</span>
+                <h2 className="text-sm font-semibold">
+                  {displayedOrder?.id === latestOrder.id ? "最近采购单" : "采购单详情"}
+                </h2>
+                <span className="text-xs text-subtle">#{displayedOrder?.id}</span>
               </div>
-              <OrderCard
-                order={latestOrder}
-                busy={receivingId === latestOrder.id}
-                onCopy={() => copyOrder(latestOrder)}
-                onExport={() => exportOrder(latestOrder)}
-                onReceive={() => onReceive(latestOrder.id)}
-                canManagePurchases={canManagePurchases}
-              />
+              {displayedOrder ? (
+                <OrderCard
+                  order={displayedOrder}
+                  busy={receivingId === displayedOrder.id}
+                  onCopy={() => copyOrder(displayedOrder)}
+                  onExport={() => exportOrder(displayedOrder)}
+                  onReceive={() => onReceive(displayedOrder.id)}
+                  canManagePurchases={canManagePurchases}
+                />
+              ) : null}
               {orders.length > 1 ? (
-                <ul className="mt-3 flex flex-col gap-2 border-t border-border pt-3">
-                  {orders.slice(1, 4).map((o) => (
-                    <li key={o.id} className="flex items-center justify-between gap-2 text-sm">
-                      <span className="min-w-0 truncate text-muted">
-                        #{o.id} · {o.itemCount} 项 · {formatWhen(o.createdAt)}
-                      </span>
-                      <StatusPill status={o.status} />
+                <ul className="mt-3 flex flex-col gap-1 border-t border-border pt-3">
+                  {orders.slice(1).map((order) => (
+                    <li key={order.id}>
+                      <button
+                        type="button"
+                        aria-pressed={selectedOrderId === order.id}
+                        onClick={() => setSelectedOrderId(order.id)}
+                        className={cn(
+                          "flex h-11 w-full items-center justify-between gap-2 rounded-lg px-2 text-left text-sm",
+                          selectedOrderId === order.id ? "bg-primary-soft text-primary" : "hover:bg-bg-elevated",
+                        )}
+                      >
+                        <span className="min-w-0 truncate text-muted">
+                          #{order.id} · {order.itemCount} 项 · {formatWhen(order.createdAt)}
+                        </span>
+                        <StatusPill status={order.status} />
+                      </button>
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {hasMoreOrders && onLoadMoreOrders ? (
+                <Button
+                  variant="outline"
+                  className="mt-3 w-full"
+                  disabled={loadingMoreOrders}
+                  onClick={onLoadMoreOrders}
+                >
+                  {loadingMoreOrders ? "加载中…" : "加载更早采购单"}
+                </Button>
               ) : null}
             </section>
           ) : null}
