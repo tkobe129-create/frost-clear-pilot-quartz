@@ -286,19 +286,45 @@ export async function listGitHubStockBatches(tenantId: string, reagents: Reagent
 }
 
 export async function listGitHubOrders(tenantId: string): Promise<PurchaseOrder[]> {
-  const [{ data: orders, error: orderError }, { data: items, error: itemError }] = await Promise.all([
-    supabase.from("purchase_orders").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }).order("id", { ascending: false }),
-    supabase.from("purchase_order_items").select("*").eq("tenant_id", tenantId).order("id", { ascending: true }),
-  ]);
+  // The home screen shows the latest order and three recent summaries only.
+  // Fetch just those order headers rather than scanning the tenant's full history.
+  const { data: orders, error: orderError } = await supabase
+    .from("purchase_orders")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(4);
   if (orderError) throwError(orderError);
-  if (itemError) throwError(itemError);
+  const orderRows = (orders ?? []) as OrderRow[];
+  if (orderRows.length === 0) return [];
+
+  // Fetch line items only for the displayed orders, in bounded pages so an
+  // unusually large purchase order cannot be silently truncated by PostgREST.
+  const orderIds = orderRows.map((row) => number(row.id));
+  const pageSize = 500;
+  const items: OrderItemRow[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from("purchase_order_items")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .in("order_id", orderIds)
+      .order("id", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error) throwError(error);
+    const page = (data ?? []) as OrderItemRow[];
+    items.push(...page);
+    if (page.length < pageSize) break;
+  }
+
   const byOrder = new Map<number, OrderItemRow[]>();
-  for (const item of (items ?? []) as OrderItemRow[]) {
+  for (const item of items) {
     const list = byOrder.get(number(item.order_id)) ?? [];
     list.push(item);
     byOrder.set(number(item.order_id), list);
   }
-  return ((orders ?? []) as OrderRow[]).map((row) => fromOrder(row, byOrder.get(number(row.id)) ?? []));
+  return orderRows.map((row) => fromOrder(row, byOrder.get(number(row.id)) ?? []));
 }
 
 export async function saveGitHubReagent(tenantId: string, data: SavePayload): Promise<Reagent> {
