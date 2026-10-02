@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { createRoot } from "react-dom/client";
 import type { User } from "@supabase/supabase-js";
 import { toast, Toaster } from "sonner";
 import { TenantAuthScreen, TenantDisabledScreen, TenantOnboardingScreen, TenantPlatformManagement } from "@/components/tenant-access";
@@ -344,18 +343,18 @@ export function GitHubPagesApp() {
   );
 }
 
-const root = document.getElementById("root");
-if (!root) throw new Error("GitHub Pages root element not found");
-createRoot(root).render(
-  <>
-    <GitHubPagesApp />
-    <Toaster
-      position="top-center"
-      richColors={false}
-      toastOptions={{
-        className: "font-sans",
-        style: { background: "#fffcf7", color: "#1c1d1a", border: "1px solid #d8d3c8" },
-      }}
-    />
-  </>,
-);
+export function GitHubPagesRoot() {
+  return (
+    <>
+      <GitHubPagesApp />
+      <Toaster
+        position="top-center"
+        richColors={false}
+        toastOptions={{
+          className: "font-sans",
+          style: { background: "#fffcf7", color: "#1c1d1a", border: "1px solid #d8d3c8" },
+        }}
+      />
+    </>
+  );
+}
