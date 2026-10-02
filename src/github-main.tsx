@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { User } from "@supabase/supabase-js";
 import { toast, Toaster } from "sonner";
-import { TenantAuthScreen, TenantDisabledScreen, TenantOnboardingScreen } from "@/components/tenant-access";
+import { TenantAuthScreen, TenantDisabledScreen, TenantOnboardingScreen, TenantPlatformManagement } from "@/components/tenant-access";
 import { HomeView } from "@/components/home-view";
 import { RecordsView } from "@/components/records-view";
 import { ReagentsView, type SavePayload } from "@/components/reagents-view";
@@ -10,6 +10,7 @@ import { ScanView } from "@/components/scan-view";
 import { AppShell, type TabId } from "@/components/shell";
 import { computeAlerts } from "@/lib/alerts";
 import {
+  checkPlatformAdmin,
   createGitHubRestockOrder,
   createTenantInvite,
   listGitHubOrdersPage,
@@ -39,6 +40,8 @@ export function GitHubPagesApp() {
   const [signedIn, setSignedIn] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [membership, setMembership] = useState<TenantMembership | null>(null);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  const [platformManagementOpen, setPlatformManagementOpen] = useState(false);
   const [accessLoading, setAccessLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -58,6 +61,21 @@ export function GitHubPagesApp() {
       setAccessLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!signedIn) {
+      setIsPlatformAdmin(false);
+      setPlatformManagementOpen(false);
+      return;
+    }
+    let active = true;
+    void checkPlatformAdmin().then((isAdmin) => {
+      if (active) setIsPlatformAdmin(isAdmin);
+    });
+    return () => {
+      active = false;
+    };
+  }, [signedIn]);
 
   const membershipTenantId = membership?.tenant.id;
   const membershipTenantStatus = membership?.tenant.status;
@@ -215,6 +233,15 @@ export function GitHubPagesApp() {
     }
   }
 
+  async function refreshMembershipAfterStatusChange() {
+    try {
+      const next = await listMyTenantMemberships();
+      setMembership(next[0] ?? null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "刷新科室状态失败");
+    }
+  }
+
   async function handleLoadMoreOrders() {
     if (!tenantId || !hasMoreOrders || loadingMoreOrders) return;
     setLoadingMoreOrders(true);
@@ -236,7 +263,15 @@ export function GitHubPagesApp() {
   if (!signedIn) return <TenantAuthScreen />;
   if (accessLoading) return <p className="min-h-dvh bg-bg p-8 text-center text-sm text-muted">正在读取检验科信息…</p>;
   if (!membership) return <TenantOnboardingScreen />;
-  if (membership.tenant.status === "disabled") return <TenantDisabledScreen tenantName={membership.tenant.name} />;
+  if (membership.tenant.status === "disabled") {
+    return (
+      <TenantDisabledScreen
+        tenantName={membership.tenant.name}
+        isPlatformAdmin={isPlatformAdmin}
+        onStatusChanged={refreshMembershipAfterStatusChange}
+      />
+    );
+  }
 
   const alertCount = computeAlerts(reagents).length;
 
@@ -250,12 +285,27 @@ export function GitHubPagesApp() {
       userName={displayName}
       userEmail={user?.email ?? ""}
       canManageMembers={isAdmin}
+      canManageTenants={isPlatformAdmin}
       onInvite={() => void handleInvite()}
+      onManageTenants={() => setPlatformManagementOpen(true)}
       onSignOut={() => void signOutGitHubUser()}
     >
-      {loading ? <p className="py-16 text-center text-sm text-muted">正在读取库存…</p> : null}
+      {platformManagementOpen ? (
+        <div className="flex flex-col gap-4">
+          <button
+            type="button"
+            className="self-start rounded-md px-3 py-2 text-sm text-muted hover:bg-bg-elevated hover:text-fg"
+            onClick={() => setPlatformManagementOpen(false)}
+          >
+            返回工作区
+          </button>
+          <TenantPlatformManagement onStatusChanged={refreshMembershipAfterStatusChange} />
+        </div>
+      ) : (
+        <>
+          {loading ? <p className="py-16 text-center text-sm text-muted">正在读取库存…</p> : null}
 
-      {!loading && tab === "home" ? (
+          {!loading && tab === "home" ? (
         <HomeView
           reagents={reagents}
           records={records}
@@ -287,7 +337,9 @@ export function GitHubPagesApp() {
         <ReagentsView reagents={reagents} saving={saving} onSave={handleSave} canManage={isAdmin} />
       ) : null}
 
-      {!loading && tab === "records" ? <RecordsView records={records} /> : null}
+          {!loading && tab === "records" ? <RecordsView records={records} /> : null}
+        </>
+      )}
     </AppShell>
   );
 }

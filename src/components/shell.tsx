@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { FlaskConical, LayoutDashboard, LogOut, ScanLine, ScrollText, UserPlus } from "lucide-react";
+import { Building2, FlaskConical, LayoutDashboard, LogOut, ScanLine, ScrollText, UserPlus } from "lucide-react";
 import type { TenantRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -29,7 +29,9 @@ type Props = {
   userName?: string;
   userEmail?: string;
   canManageMembers?: boolean;
+  canManageTenants?: boolean;
   onInvite?: () => void;
+  onManageTenants?: () => void;
   onSignOut?: () => void;
 };
 
@@ -43,7 +45,9 @@ export function AppShell({
   userName = "",
   userEmail = "",
   canManageMembers = false,
+  canManageTenants = false,
   onInvite,
+  onManageTenants,
   onSignOut,
 }: Props) {
   return (
@@ -106,6 +110,17 @@ export function AppShell({
                   onClick={onInvite}
                 >
                   <UserPlus className="size-4" />
+                </button>
+              ) : null}
+              {canManageTenants && onManageTenants ? (
+                <button
+                  type="button"
+                  className="flex size-10 items-center justify-center rounded-md text-primary hover:bg-primary-soft"
+                  aria-label="平台科室管理"
+                  title="平台科室管理"
+                  onClick={onManageTenants}
+                >
+                  <Building2 className="size-4" />
                 </button>
               ) : null}
               {onSignOut ? (

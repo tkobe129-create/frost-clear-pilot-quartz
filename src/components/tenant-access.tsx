@@ -320,7 +320,15 @@ export function TenantOnboardingScreen() {
   );
 }
 
-export function TenantDisabledScreen({ tenantName }: { tenantName: string }) {
+export function TenantDisabledScreen({
+  tenantName,
+  isPlatformAdmin = false,
+  onStatusChanged,
+}: {
+  tenantName: string;
+  isPlatformAdmin?: boolean;
+  onStatusChanged?: (tenantId: string, status: Tenant["status"]) => void | Promise<void>;
+}) {
   const [signingOut, setSigningOut] = useState(false);
 
   async function leave() {
@@ -341,11 +349,97 @@ export function TenantDisabledScreen({ tenantName }: { tenantName: string }) {
         <p className="mt-2 text-sm text-muted">
           「{tenantName}」已暂停使用。该科室数据暂不可读取或修改；如需恢复，请联系平台管理员。
         </p>
+        {isPlatformAdmin ? (
+          <div className="mt-6 text-left">
+            <TenantPlatformManagement onStatusChanged={onStatusChanged} />
+          </div>
+        ) : null}
         <Button variant="outline" className="mt-6" disabled={signingOut} onClick={() => void leave()}>
           <LogOut className="size-4" />
           {signingOut ? "退出中…" : "退出登录"}
         </Button>
       </section>
     </main>
+  );
+}
+
+export function TenantPlatformManagement({
+  onStatusChanged,
+}: {
+  onStatusChanged?: (tenantId: string, status: Tenant["status"]) => void | Promise<void>;
+}) {
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    listPlatformTenants()
+      .then((items) => {
+        if (active) setTenants(items);
+      })
+      .catch((error) => {
+        if (active) toast.error(error instanceof Error ? error.message : "读取科室列表失败");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function toggleStatus(tenant: Tenant) {
+    const status = tenant.status === "active" ? "disabled" : "active";
+    setBusyId(tenant.id);
+    try {
+      await setPlatformTenantStatus(tenant.id, status);
+      setTenants((current) => current.map((item) => (item.id === tenant.id ? { ...item, status } : item)));
+      toast.success(status === "disabled" ? `已停用「${tenant.name}」` : `已恢复「${tenant.name}」`);
+      await onStatusChanged?.(tenant.id, status);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更改科室状态失败");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border bg-surface p-4 shadow-card">
+      <h2 className="text-base font-semibold">平台科室管理</h2>
+      <p className="mt-1 text-xs leading-5 text-muted">停用后该科室成员将无法读取或修改科室数据；重新启用后可恢复访问。</p>
+      {loading ? (
+        <p className="py-5 text-center text-sm text-muted">正在读取科室列表…</p>
+      ) : tenants.length > 0 ? (
+        <ul className="mt-3 flex flex-col gap-2">
+          {tenants.map((tenant) => (
+            <li key={tenant.id} className="flex items-center gap-3 rounded-lg border border-border bg-bg-elevated px-3 py-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{tenant.name}</p>
+                <p className="mt-0.5 truncate text-xs text-muted">{tenant.code}</p>
+              </div>
+              <span
+                className={`shrink-0 rounded-full px-2 py-1 text-xs ${
+                  tenant.status === "active" ? "bg-primary-soft text-primary" : "bg-surface text-muted"
+                }`}
+              >
+                {tenant.status === "active" ? "运行中" : "已停用"}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 shrink-0"
+                disabled={busyId === tenant.id}
+                onClick={() => void toggleStatus(tenant)}
+              >
+                {busyId === tenant.id ? "处理中…" : tenant.status === "active" ? "停用" : "重新启用"}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="py-5 text-center text-sm text-muted">暂无已开通检验科</p>
+      )}
+    </section>
   );
 }
