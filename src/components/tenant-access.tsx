@@ -65,7 +65,7 @@ export function TenantAuthScreen() {
             className={`h-10 flex-1 rounded-md text-sm ${mode === "sign-up" ? "bg-surface font-medium shadow-sm" : "text-muted"}`}
             onClick={() => setMode("sign-up")}
           >
-            注册管理员账号
+            注册新账号
           </button>
         </div>
         <div className="mt-4 flex flex-col gap-3">

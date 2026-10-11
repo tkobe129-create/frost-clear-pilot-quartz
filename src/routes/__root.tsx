@@ -2,7 +2,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { useState } from "react";
 import { Toaster } from "sonner";
-import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import appCss from "../styles.css?url";
 
@@ -64,23 +63,21 @@ function RootDocument() {
       </head>
       <body className="bg-bg text-fg">
         <PreviewHostBridge />
-        <AuthProvider>
-          <QueryClientProvider client={queryClient}>
-            <Outlet />
-            <Toaster
-              position="top-center"
-              richColors={false}
-              toastOptions={{
-                className: "font-sans",
-                style: {
-                  background: "#fffcf7",
-                  color: "#1c1d1a",
-                  border: "1px solid #d8d3c8",
-                },
-              }}
-            />
-          </QueryClientProvider>
-        </AuthProvider>
+        <QueryClientProvider client={queryClient}>
+          <Outlet />
+          <Toaster
+            position="top-center"
+            richColors={false}
+            toastOptions={{
+              className: "font-sans",
+              style: {
+                background: "#fffcf7",
+                color: "#1c1d1a",
+                border: "1px solid #d8d3c8",
+              },
+            }}
+          />
+        </QueryClientProvider>
         <Scripts />
       </body>
     </html>

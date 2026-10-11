@@ -77,7 +77,7 @@ function pushUnknown(raw: string, start: number, end: number, segs: ParsedSegmen
 
 function parseParenthesized(raw: string): ParsedSegment[] {
   const parsed: ParsedSegment[] = [];
-  const regex = /\((\d{2,4})\)([^\()]*)/g;
+  const regex = /\((\d{2,4})\)([^()]*)/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(raw)) !== null) {
     const ai = match[1] ?? "";

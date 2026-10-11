@@ -473,45 +473,16 @@ begin
   end if;
 
   return query
-  with tenant_reagents as (
-    select r.id, r.lot_number, r.expiry_date, r.production_date, r.stock_quantity
-    from public.reagents r
-    where r.tenant_id = p_tenant_id
-  ),
-  batch_ledger as (
-    select
-      sr.reagent_id,
-      sr.lot_number,
-      sr.expiry_date,
-      sr.production_date,
-      sum(case when sr.type = 'in' then sr.quantity else -sr.quantity end)::bigint as quantity
-    from public.stock_records sr
-    where sr.tenant_id = p_tenant_id
-      and (sr.lot_number <> '' or sr.expiry_date <> '')
-    group by sr.reagent_id, sr.lot_number, sr.expiry_date, sr.production_date
-  ),
-  known_net as (
-    select bl.reagent_id, sum(bl.quantity)::bigint as quantity
-    from batch_ledger bl
-    group by bl.reagent_id
-  ),
-  combined as (
-    select bl.reagent_id, bl.lot_number, bl.expiry_date, bl.production_date, bl.quantity
-    from batch_ledger bl
-    union all
-    select
-      r.id,
-      r.lot_number,
-      r.expiry_date,
-      r.production_date,
-      (r.stock_quantity - coalesce(kn.quantity, 0))::bigint
-    from tenant_reagents r
-    left join known_net kn on kn.reagent_id = r.id
-  )
-  select c.reagent_id, c.lot_number, c.expiry_date, c.production_date, sum(c.quantity)::bigint
-  from combined c
-  group by c.reagent_id, c.lot_number, c.expiry_date, c.production_date
-  having sum(c.quantity) > 0;
+  select
+    sr.reagent_id,
+    sr.lot_number,
+    sr.expiry_date,
+    sr.production_date,
+    sum(case when sr.type = 'in' then sr.quantity else -sr.quantity end)::bigint as quantity
+  from public.stock_records sr
+  where sr.tenant_id = p_tenant_id
+  group by sr.reagent_id, sr.lot_number, sr.expiry_date, sr.production_date
+  having sum(case when sr.type = 'in' then sr.quantity else -sr.quantity end) > 0;
 end;
 $$;
 
@@ -528,8 +499,6 @@ declare
   batch_lot text;
   batch_expiry text;
   batch_production text;
-  batch_net bigint;
-  known_net bigint;
   available_batch bigint;
   total integer := 0;
 begin
@@ -550,34 +519,23 @@ begin
 
     if p_type = 'out' then
       if reagent_row.stock_quantity < item_quantity then
-        raise exception '出库数量超过库存：%', reagent_row.name;
+        raise exception '出库数量超过总库存：%', reagent_row.name;
       end if;
 
-      select coalesce(sum(case when sr.type = 'in' then sr.quantity else -sr.quantity end), 0)::bigint
-      into batch_net
-      from public.stock_records sr
-      where sr.tenant_id = p_tenant_id
-        and sr.reagent_id = reagent_row.id
-        and (sr.lot_number <> '' or sr.expiry_date <> '')
-        and sr.lot_number = batch_lot
-        and sr.expiry_date = batch_expiry
-        and sr.production_date = batch_production;
+      -- 批次余量校验：如果出库指定了批号或效期，校验当前批次的可用流水余量
+      if batch_lot <> '' or batch_expiry <> '' then
+        select coalesce(sum(case when sr.type = 'in' then sr.quantity else -sr.quantity end), 0)::bigint
+        into available_batch
+        from public.stock_records sr
+        where sr.tenant_id = p_tenant_id
+          and sr.reagent_id = reagent_row.id
+          and sr.lot_number = batch_lot
+          and sr.expiry_date = batch_expiry
+          and sr.production_date = batch_production;
 
-      select coalesce(sum(case when sr.type = 'in' then sr.quantity else -sr.quantity end), 0)::bigint
-      into known_net
-      from public.stock_records sr
-      where sr.tenant_id = p_tenant_id
-        and sr.reagent_id = reagent_row.id
-        and (sr.lot_number <> '' or sr.expiry_date <> '');
-
-      available_batch := batch_net;
-      if batch_lot = reagent_row.lot_number
-        and batch_expiry = reagent_row.expiry_date
-        and batch_production = reagent_row.production_date then
-        available_batch := available_batch + reagent_row.stock_quantity - known_net;
-      end if;
-      if available_batch < item_quantity then
-        raise exception '所选批次库存不足：%', reagent_row.name;
+        if available_batch < item_quantity then
+          raise exception '所选批次库存不足（批号: %，余量: %）：%', batch_lot, available_batch, reagent_row.name;
+        end if;
       end if;
     end if;
 
@@ -587,6 +545,14 @@ begin
     insert into public.stock_records
       (tenant_id, reagent_id, type, quantity, lot_number, expiry_date, production_date, note, operator, department, reason)
     values
+      (p_tenant_id, reagent_row.id, p_type, item_quantity,
+       batch_lot, batch_expiry, batch_production, coalesce(item->>'note', ''),
+       coalesce(p_operator, ''), coalesce(p_department, ''), coalesce(p_reason, ''));
+    total := total + 1;
+  end loop;
+  return total;
+end;
+$$;
       (p_tenant_id, reagent_row.id, p_type, item_quantity,
        batch_lot, batch_expiry, batch_production, coalesce(item->>'note', ''),
        coalesce(p_operator, ''), coalesce(p_department, ''), coalesce(p_reason, ''));
