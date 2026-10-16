@@ -112,17 +112,33 @@ export function ReagentsView({
   reagents,
   saving,
   onSave,
+  onAdjustStock,
   canManage = true,
 }: {
   reagents: Reagent[];
   saving: boolean;
   onSave: (data: SavePayload) => Promise<void>;
+  onAdjustStock?: (params: {
+    reagentId: number;
+    actualStock: number;
+    lotNumber: string;
+    expiryDate: string;
+    reason: string;
+  }) => Promise<void>;
   canManage?: boolean;
 }) {
   const [q, setQ] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
+
+  // 盘点纠偏弹窗状态
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [adjustActualStock, setAdjustActualStock] = useState("");
+  const [adjustLotNumber, setAdjustLotNumber] = useState("");
+  const [adjustExpiryDate, setAdjustExpiryDate] = useState("");
+  const [adjustReason, setAdjustReason] = useState("日常盘点纠偏");
+  const [adjusting, setAdjusting] = useState(false);
 
   const categorySummaries = useMemo(() => {
     const grouped = new Map<string, { category: string; reagents: Reagent[]; totalStock: number; lowCount: number; outCount: number }>();
@@ -255,11 +271,29 @@ export function ReagentsView({
           <Field label="厂家" value={draft.manufacturer} onChange={(v) => setDraft({ ...draft, manufacturer: v })} />
           {draft.id ? (
             <div className="min-w-0">
-              <Label>当前库存（只读）</Label>
-              <div className="mt-1 flex h-11 items-center rounded-md border border-border bg-bg-elevated px-3 text-sm tabular">
-                {draft.stockQuantity}
+              <div className="flex items-center justify-between">
+                <Label>当前库存</Label>
+                {canManage && onAdjustStock ? (
+                  <button
+                    type="button"
+                    className="text-xs font-semibold text-primary underline underline-offset-2 hover:opacity-80"
+                    onClick={() => {
+                      setAdjustActualStock(draft.stockQuantity);
+                      setAdjustLotNumber(draft.lotNumber);
+                      setAdjustExpiryDate(draft.expiryDate);
+                      setAdjustReason("日常盘点纠偏");
+                      setAdjustOpen(true);
+                    }}
+                  >
+                    盘点纠偏
+                  </button>
+                ) : null}
               </div>
-              <p className="mt-1 text-xs leading-5 text-muted">库存变化请通过入库或出库操作调整，系统会保留记录。</p>
+              <div className="mt-1 flex h-11 items-center justify-between rounded-md border border-border bg-bg-elevated px-3 text-sm tabular">
+                <span className="font-semibold text-fg">{draft.stockQuantity}</span>
+                <span className="text-xs text-muted">{draft.unit}</span>
+              </div>
+              <p className="mt-1 text-xs leading-5 text-muted">账实不符时请点击上方「盘点纠偏」，系统将自动生成盘盈/盘亏审计记录。</p>
             </div>
           ) : (
             <Field
@@ -324,6 +358,132 @@ export function ReagentsView({
         <Button className="h-12" disabled={saving} onClick={() => void save()}>
           {saving ? "保存中…" : draft.id ? "更新试剂" : "保存预录"}
         </Button>
+
+        {adjustOpen && draft.id ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-2xl">
+              <h3 className="text-lg font-semibold">日常盘点与库存纠偏</h3>
+              <p className="mt-1 text-xs text-muted">
+                对【{draft.name}】进行账实对齐。系统将自动生成盘盈或盘亏审计流水。
+              </p>
+
+              <div className="mt-4 flex flex-col gap-3">
+                <div className="flex items-center justify-between rounded-lg bg-bg-elevated p-3 text-sm">
+                  <span className="text-muted">当前账面库存</span>
+                  <span className="font-semibold">{draft.stockQuantity} {draft.unit}</span>
+                </div>
+
+                <label className="text-sm font-medium">
+                  实际盘点库存 ({draft.unit})
+                  <Input
+                    className="mt-1 h-11 text-base font-semibold"
+                    type="number"
+                    min="0"
+                    placeholder="输入实物盘点数量"
+                    value={adjustActualStock}
+                    onChange={(e) => setAdjustActualStock(e.target.value)}
+                  />
+                </label>
+
+                {(() => {
+                  const actual = Number(adjustActualStock);
+                  const current = Number(draft.stockQuantity);
+                  if (!Number.isFinite(actual) || actual < 0 || adjustActualStock.trim() === "") return null;
+                  const diff = actual - current;
+                  return (
+                    <div className={cn(
+                      "rounded-lg p-2.5 text-xs font-medium",
+                      diff > 0 ? "bg-ok/10 text-ok" : diff < 0 ? "bg-warn/10 text-warn" : "bg-bg-elevated text-muted"
+                    )}>
+                      {diff > 0
+                        ? `差异：盘盈 +${diff} ${draft.unit}（将生成盘盈入库流水）`
+                        : diff < 0
+                        ? `差异：盘亏 ${diff} ${draft.unit}（将生成盘亏出库流水）`
+                        : "账实一致，无需调整"}
+                    </div>
+                  );
+                })()}
+
+                <label className="text-sm font-medium">
+                  纠偏批号（选填）
+                  <Input
+                    className="mt-1"
+                    placeholder="不填则使用试剂默认批号"
+                    value={adjustLotNumber}
+                    onChange={(e) => setAdjustLotNumber(e.target.value)}
+                  />
+                </label>
+
+                <label className="text-sm font-medium">
+                  效期（选填）
+                  <Input
+                    className="mt-1"
+                    placeholder="YYYY-MM-DD"
+                    value={adjustExpiryDate}
+                    onChange={(e) => setAdjustExpiryDate(e.target.value)}
+                  />
+                </label>
+
+                <label className="text-sm font-medium">
+                  盘点原因 / 说明
+                  <Input
+                    className="mt-1"
+                    placeholder="例如：月度例行盘点、破损报损、上机损耗"
+                    value={adjustReason}
+                    onChange={(e) => setAdjustReason(e.target.value)}
+                  />
+                </label>
+
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="flex-1"
+                    disabled={adjusting}
+                    onClick={() => setAdjustOpen(false)}
+                  >
+                    取消
+                  </Button>
+                  <Button
+                    className="flex-1"
+                    disabled={
+                      adjusting ||
+                      adjustActualStock.trim() === "" ||
+                      Number(adjustActualStock) < 0 ||
+                      Number(adjustActualStock) === Number(draft.stockQuantity)
+                    }
+                    onClick={async () => {
+                      if (!onAdjustStock || !draft.id) return;
+                      const nextQty = Number(adjustActualStock);
+                      if (!Number.isFinite(nextQty) || nextQty < 0) {
+                        toast.error("请输入有效的盘点库存数量");
+                        return;
+                      }
+                      setAdjusting(true);
+                      try {
+                        await onAdjustStock({
+                          reagentId: draft.id,
+                          actualStock: nextQty,
+                          lotNumber: adjustLotNumber,
+                          expiryDate: adjustExpiryDate,
+                          reason: adjustReason,
+                        });
+                        setDraft({ ...draft, stockQuantity: String(nextQty) });
+                        setAdjustOpen(false);
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : "盘点纠偏失败");
+                      } finally {
+                        setAdjusting(false);
+                      }
+                    }}
+                  >
+                    {adjusting ? "提交中…" : "确认纠偏"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         <ScannerOverlay
           open={cameraOpen}
           onClose={() => setCameraOpen(false)}

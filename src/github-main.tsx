@@ -20,6 +20,7 @@ import {
   receiveGitHubOrder,
   signOutGitHubUser,
   saveGitHubReagent,
+  adjustGitHubReagentStock,
   submitGitHubStockBatch,
   supabase,
   type ReagentStockItem,
@@ -194,6 +195,30 @@ export function GitHubPagesApp() {
     }
   }
 
+  async function handleAdjustStock({
+    reagentId,
+    actualStock,
+    lotNumber,
+    expiryDate,
+    reason,
+  }: {
+    reagentId: number;
+    actualStock: number;
+    lotNumber: string;
+    expiryDate: string;
+    reason: string;
+  }) {
+    if (!tenantId || !isAdmin) return;
+    try {
+      await adjustGitHubReagentStock(tenantId, reagentId, actualStock, lotNumber, expiryDate, reason, operatorName);
+      await refreshAll();
+      toast.success("盘点纠偏成功，已自动入账");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "盘点纠偏失败");
+      throw error;
+    }
+  }
+
   async function handleOrder() {
     if (!tenantId || !isAdmin) return;
     setOrdering(true);
@@ -333,7 +358,13 @@ export function GitHubPagesApp() {
       ) : null}
 
       {!loading && tab === "reagents" ? (
-        <ReagentsView reagents={reagents} saving={saving} onSave={handleSave} canManage={isAdmin} />
+        <ReagentsView
+          reagents={reagents}
+          saving={saving}
+          onSave={handleSave}
+          onAdjustStock={handleAdjustStock}
+          canManage={isAdmin}
+        />
       ) : null}
 
           {!loading && tab === "records" ? <RecordsView records={records} /> : null}

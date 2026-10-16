@@ -635,6 +635,81 @@ grant execute on function public.submit_stock_batch(uuid, text, text, text, text
 grant execute on function public.create_restock_order(uuid, text) to authenticated;
 grant execute on function public.receive_purchase_order(uuid, bigint, text) to authenticated;
 
+-- 管理员日常盘点与库存纠偏：自动计算盘盈/盘亏差异并写入审计流水
+create or replace function public.adjust_reagent_stock(
+  p_tenant_id uuid,
+  p_reagent_id bigint,
+  p_actual_stock integer,
+  p_lot_number text,
+  p_expiry_date text,
+  p_reason text,
+  p_operator text
+)
+returns public.reagents
+language plpgsql security definer set search_path = public
+as $$
+declare
+  reagent_row public.reagents;
+  diff integer;
+  op_type text;
+  batch_lot text := coalesce(trim(p_lot_number), '');
+  batch_expiry text := coalesce(trim(p_expiry_date), '');
+  op_reason text := coalesce(trim(p_reason), '日常盘点纠偏');
+  op_name text := coalesce(trim(p_operator), '管理员');
+begin
+  if not public.is_tenant_admin(p_tenant_id) then
+    raise exception '只有检验科管理员可以执行库存盘点纠偏';
+  end if;
+  if p_actual_stock is null or p_actual_stock < 0 then
+    raise exception '实际盘点库存不能小于 0';
+  end if;
+
+  select * into reagent_row from public.reagents
+  where id = p_reagent_id and tenant_id = p_tenant_id for update;
+  if reagent_row.id is null then
+    raise exception '试剂不存在或不属于当前检验科';
+  end if;
+
+  diff := p_actual_stock - reagent_row.stock_quantity;
+  if diff = 0 then
+    return reagent_row;
+  end if;
+
+  if diff > 0 then
+    op_type := 'in';
+  else
+    op_type := 'out';
+  end if;
+
+  update public.reagents
+  set stock_quantity = p_actual_stock
+  where id = p_reagent_id and tenant_id = p_tenant_id
+  returning * into reagent_row;
+
+  insert into public.stock_records (
+    tenant_id, reagent_id, type, quantity, lot_number, expiry_date,
+    production_date, note, operator, department, reason
+  ) values (
+    p_tenant_id,
+    p_reagent_id,
+    op_type,
+    abs(diff),
+    case when batch_lot <> '' then batch_lot else reagent_row.lot_number end,
+    case when batch_expiry <> '' then batch_expiry else reagent_row.expiry_date end,
+    reagent_row.production_date,
+    format('盘点纠偏：账面 %s -> 实际 %s（%s %s）', reagent_row.stock_quantity - diff, p_actual_stock, case when diff > 0 then '盘盈' else '盘亏' end, abs(diff)),
+    op_name,
+    '检验科',
+    case when diff > 0 then '盘点盘盈' else '盘点盘亏' end || ' · ' || op_reason
+  );
+
+  return reagent_row;
+end;
+$$;
+
+revoke all on function public.adjust_reagent_stock(uuid, bigint, integer, text, text, text, text) from public, anon;
+grant execute on function public.adjust_reagent_stock(uuid, bigint, integer, text, text, text, text) to authenticated;
+
 -- ── 8) 自检：应看到下面 7 张表，初始化即完成 ─────────────────────────
 
 select table_name

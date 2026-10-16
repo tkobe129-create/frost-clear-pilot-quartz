@@ -365,6 +365,28 @@ export async function saveGitHubReagent(tenantId: string, data: SavePayload, ope
   return fromReagent(result as ReagentRow);
 }
 
+export async function adjustGitHubReagentStock(
+  tenantId: string,
+  reagentId: number,
+  actualStock: number,
+  lotNumber: string,
+  expiryDate: string,
+  reason: string,
+  operator: string,
+): Promise<Reagent> {
+  const { data, error } = await supabase.rpc("adjust_reagent_stock", {
+    p_tenant_id: tenantId,
+    p_reagent_id: reagentId,
+    p_actual_stock: actualStock,
+    p_lot_number: lotNumber,
+    p_expiry_date: expiryDate,
+    p_reason: reason,
+    p_operator: operator || "管理员",
+  });
+  if (error) throwError(error);
+  return fromReagent(data as ReagentRow);
+}
+
 export async function submitGitHubStockBatch(
   tenantId: string,
   type: StockType,
