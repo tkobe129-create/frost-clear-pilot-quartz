@@ -316,13 +316,12 @@ export function ReagentsView({
             onChange={(v) => setDraft({ ...draft, storageCondition: v })}
           />
           <Field label="货位" value={draft.location} onChange={(v) => setDraft({ ...draft, location: v })} />
-          <Field
+          <DateField
             label="有效期"
             value={draft.expiryDate}
             onChange={(v) => setDraft({ ...draft, expiryDate: v })}
-            placeholder="YYYY-MM-DD"
           />
-          <Field
+          <DateField
             label="生产日期"
             value={draft.productionDate}
             onChange={(v) => setDraft({ ...draft, productionDate: v })}
@@ -414,15 +413,13 @@ export function ReagentsView({
                   />
                 </label>
 
-                <label className="text-sm font-medium">
-                  效期（选填）
-                  <Input
-                    className="mt-1"
-                    placeholder="YYYY-MM-DD"
+                <div className="min-w-0">
+                  <DateField
+                    label="效期（选填）"
                     value={adjustExpiryDate}
-                    onChange={(e) => setAdjustExpiryDate(e.target.value)}
+                    onChange={setAdjustExpiryDate}
                   />
-                </label>
+                </div>
 
                 <label className="text-sm font-medium">
                   盘点原因 / 说明
@@ -630,6 +627,67 @@ export function ReagentsView({
         })}
       </ul>
       {filtered.length === 0 ? <p className="py-10 text-center text-sm text-muted">没有匹配的试剂</p> : null}
+    </div>
+  );
+}
+
+function formatQuickDate(input: string): string {
+  const raw = input.trim();
+  if (raw.includes("-")) {
+    const parts = raw.split("-").map((p) => p.trim());
+    if (parts.length === 3 && parts[0].length === 4) {
+      return `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}`;
+    }
+    return raw;
+  }
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 8) {
+    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+  }
+  if (digits.length === 6) {
+    return `20${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4, 6)}`;
+  }
+  if (digits.length === 4 && Number(digits.slice(0, 2)) >= 20) {
+    return `20${digits.slice(0, 2)}-${digits.slice(2, 4)}`;
+  }
+  return raw;
+}
+
+function DateField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="min-w-0">
+      <Label>{label}</Label>
+      <Input
+        className="mt-1 font-mono tabular"
+        inputMode="numeric"
+        placeholder="纯数字如 20261018 或 261018"
+        value={value}
+        onChange={(e) => {
+          const val = e.target.value;
+          const cleaned = val.replace(/\D/g, "");
+          if (cleaned.length === 8 && !val.includes("-")) {
+            onChange(`${cleaned.slice(0, 4)}-${cleaned.slice(4, 6)}-${cleaned.slice(6, 8)}`);
+          } else if (cleaned.length === 6 && !val.includes("-") && val.length === 6) {
+            onChange(`20${cleaned.slice(0, 2)}-${cleaned.slice(2, 4)}-${cleaned.slice(4, 6)}`);
+          } else {
+            onChange(val);
+          }
+        }}
+        onBlur={(e) => {
+          const formatted = formatQuickDate(e.target.value);
+          if (formatted !== e.target.value) {
+            onChange(formatted);
+          }
+        }}
+      />
     </div>
   );
 }
