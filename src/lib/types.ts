@@ -1,5 +1,20 @@
 export type StockType = "in" | "out";
 
+export type TenantRole = "admin" | "employee";
+
+export type Tenant = {
+  id: string;
+  name: string;
+  code: string;
+  status: "active" | "disabled";
+  createdAt: string;
+};
+
+export type TenantMembership = {
+  tenant: Tenant;
+  role: TenantRole;
+};
+
 export type ScanSegmentRule = {
   ai: string;
   desc: string;
@@ -41,6 +56,14 @@ export type ExtractedFields = {
   expiryDateFormatted?: string;
   serialNumber?: string;
   quantity?: string;
+};
+
+export type StockBatch = {
+  reagentId: number;
+  lotNumber: string;
+  expiryDate: string;
+  productionDate: string;
+  quantity: number;
 };
 
 export type StockRecord = {

@@ -1,8 +1,10 @@
-import { Check, ClipboardCopy, PackagePlus, Truck } from "lucide-react";
+import { useState } from "react";
+import { Check, ClipboardCopy, Download, PackagePlus, Truck } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { computeAlerts, formatWhen, orderText } from "@/lib/alerts";
+import { exportPurchaseOrderExcel } from "@/lib/export-excel";
 import type { PurchaseOrder, Reagent, ReagentAlert, StockRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -10,10 +12,14 @@ type Props = {
   reagents: Reagent[];
   records: StockRecord[];
   orders: PurchaseOrder[];
+  hasMoreOrders?: boolean;
+  loadingMoreOrders?: boolean;
+  onLoadMoreOrders?: () => void;
   ordering: boolean;
   receivingId: number | null;
   onOrder: () => void;
   onReceive: (id: number) => void;
+  canManagePurchases?: boolean;
   onGoScan: () => void;
   onGoReagents: () => void;
 };
@@ -29,10 +35,14 @@ export function HomeView({
   reagents,
   records,
   orders,
+  hasMoreOrders = false,
+  loadingMoreOrders = false,
+  onLoadMoreOrders,
   ordering,
   receivingId,
   onOrder,
   onReceive,
+  canManagePurchases = true,
   onGoScan,
   onGoReagents,
 }: Props) {
@@ -40,6 +50,8 @@ export function HomeView({
   const lowCount = reagents.filter((r) => r.minStock > 0 && r.stockQuantity <= r.minStock).length;
   const totalStock = reagents.reduce((s, r) => s + r.stockQuantity, 0);
   const latestOrder = orders[0];
+  const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
+  const displayedOrder = orders.find((order) => order.id === selectedOrderId) ?? latestOrder;
 
   async function copyOrder(order: PurchaseOrder) {
     try {
@@ -47,6 +59,15 @@ export function HomeView({
       toast.success("补货单已复制，可发给供应商");
     } catch {
       toast.error("复制失败，请手动摘录清单");
+    }
+  }
+
+  function exportOrder(order: PurchaseOrder) {
+    try {
+      exportPurchaseOrderExcel(order);
+      toast.success("采购单 Excel 已下载");
+    } catch {
+      toast.error("导出失败，请稍后重试");
     }
   }
 
@@ -59,14 +80,16 @@ export function HomeView({
             <p className="text-3xl font-semibold tabular tracking-tight">{alerts.length}</p>
             <p className="mt-1 text-sm text-primary-fg/75">条预警待处理</p>
           </div>
-          <Button
-            onClick={onOrder}
-            disabled={ordering || lowCount === 0}
-            className="h-11 w-full bg-surface text-primary hover:bg-bg-elevated disabled:bg-surface/50 sm:w-auto"
-          >
-            <PackagePlus className="size-4" />
-            {ordering ? "生成中…" : "一键下单"}
-          </Button>
+          {canManagePurchases ? (
+            <Button
+              onClick={onOrder}
+              disabled={ordering || lowCount === 0}
+              className="h-11 w-full bg-surface text-primary hover:bg-bg-elevated disabled:bg-surface/50 sm:w-auto"
+            >
+              <PackagePlus className="size-4" />
+              {ordering ? "生成中…" : "一键下单"}
+            </Button>
+          ) : null}
         </div>
         <p className="mt-3 text-xs text-primary-fg/65">
           {lowCount > 0 ? `将按安全库存为 ${lowCount} 项缺货试剂生成采购单` : "暂无低于安全库存的试剂"}
@@ -115,26 +138,52 @@ export function HomeView({
           {latestOrder ? (
             <section className="rounded-xl border border-border bg-surface p-3 shadow-card sm:p-4">
               <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-sm font-semibold">最近采购单</h2>
-                <span className="text-xs text-subtle">#{latestOrder.id}</span>
+                <h2 className="text-sm font-semibold">
+                  {displayedOrder?.id === latestOrder.id ? "最近采购单" : "采购单详情"}
+                </h2>
+                <span className="text-xs text-subtle">#{displayedOrder?.id}</span>
               </div>
-              <OrderCard
-                order={latestOrder}
-                busy={receivingId === latestOrder.id}
-                onCopy={() => copyOrder(latestOrder)}
-                onReceive={() => onReceive(latestOrder.id)}
-              />
+              {displayedOrder ? (
+                <OrderCard
+                  order={displayedOrder}
+                  busy={receivingId === displayedOrder.id}
+                  onCopy={() => copyOrder(displayedOrder)}
+                  onExport={() => exportOrder(displayedOrder)}
+                  onReceive={() => onReceive(displayedOrder.id)}
+                  canManagePurchases={canManagePurchases}
+                />
+              ) : null}
               {orders.length > 1 ? (
-                <ul className="mt-3 flex flex-col gap-2 border-t border-border pt-3">
-                  {orders.slice(1, 4).map((o) => (
-                    <li key={o.id} className="flex items-center justify-between gap-2 text-sm">
-                      <span className="min-w-0 truncate text-muted">
-                        #{o.id} · {o.itemCount} 项 · {formatWhen(o.createdAt)}
-                      </span>
-                      <StatusPill status={o.status} />
+                <ul className="mt-3 flex flex-col gap-1 border-t border-border pt-3">
+                  {orders.slice(1).map((order) => (
+                    <li key={order.id}>
+                      <button
+                        type="button"
+                        aria-pressed={selectedOrderId === order.id}
+                        onClick={() => setSelectedOrderId(order.id)}
+                        className={cn(
+                          "flex h-11 w-full items-center justify-between gap-2 rounded-lg px-2 text-left text-sm",
+                          selectedOrderId === order.id ? "bg-primary-soft text-primary" : "hover:bg-bg-elevated",
+                        )}
+                      >
+                        <span className="min-w-0 truncate text-muted">
+                          #{order.id} · {order.itemCount} 项 · {formatWhen(order.createdAt)}
+                        </span>
+                        <StatusPill status={order.status} />
+                      </button>
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {hasMoreOrders && onLoadMoreOrders ? (
+                <Button
+                  variant="outline"
+                  className="mt-3 w-full"
+                  disabled={loadingMoreOrders}
+                  onClick={onLoadMoreOrders}
+                >
+                  {loadingMoreOrders ? "加载中…" : "加载更早采购单"}
+                </Button>
               ) : null}
             </section>
           ) : null}
@@ -200,12 +249,16 @@ function OrderCard({
   order,
   busy,
   onCopy,
+  onExport,
   onReceive,
+  canManagePurchases,
 }: {
   order: PurchaseOrder;
   busy: boolean;
   onCopy: () => void;
+  onExport: () => void;
   onReceive: () => void;
+  canManagePurchases: boolean;
 }) {
   return (
     <div>
@@ -229,10 +282,16 @@ function OrderCard({
           <ClipboardCopy className="size-3.5" />
           复制清单
         </Button>
-        {order.status === "submitted" ? (
+        <Button variant="outline" size="sm" className="h-11 flex-1 sm:h-9" onClick={onExport}>
+          <Download className="size-3.5" />
+          导出 Excel
+        </Button>
+        {order.status === "submitted" && canManagePurchases ? (
           <Button size="sm" className="h-11 flex-1 sm:h-9" disabled={busy} onClick={onReceive}>
             {busy ? "入库中…" : "确认到货入库"}
           </Button>
+        ) : order.status === "submitted" ? (
+          <span className="flex h-11 flex-1 items-center justify-center text-xs text-muted sm:h-9">待管理员确认到货</span>
         ) : (
           <span className="flex h-11 flex-1 items-center justify-center gap-1 text-xs text-ok sm:h-9">
             <Check className="size-3.5" />

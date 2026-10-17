@@ -108,11 +108,7 @@ export function ScannerOverlay({ open, onClose, onDetect }: Props) {
               const zxingText = decodeCanvas(reader, canvas);
               if (zxingText) {
                 emit(zxingText);
-                busy = false;
-                return;
-              }
-
-              if (detector) {
+              } else if (detector) {
                 try {
                   const codes = await detector.detect(canvas);
                   const nativeText = codes[0]?.rawValue?.trim();
@@ -121,6 +117,9 @@ export function ScannerOverlay({ open, onClose, onDetect }: Props) {
                   /* Safari may reject some canvas frames */
                 }
               }
+              // Keep scheduling frames after a successful decode. Returning from
+              // here used to stop the loop after the first barcode, which made
+              // the camera look like a single-scan reader.
               frame += 1;
             } finally {
               busy = false;

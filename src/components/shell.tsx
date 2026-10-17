@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { FlaskConical, LayoutDashboard, ScanLine, ScrollText } from "lucide-react";
+import { Building2, FlaskConical, LayoutDashboard, LogOut, ScanLine, ScrollText, UserPlus } from "lucide-react";
+import type { TenantRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export type TabId = "home" | "scan" | "reagents" | "records";
@@ -23,9 +24,32 @@ type Props = {
   onTab: (id: TabId) => void;
   alertCount: number;
   children: ReactNode;
+  tenantName?: string;
+  tenantRole?: TenantRole;
+  userName?: string;
+  userEmail?: string;
+  canManageMembers?: boolean;
+  canManageTenants?: boolean;
+  onInvite?: () => void;
+  onManageTenants?: () => void;
+  onSignOut?: () => void;
 };
 
-export function AppShell({ tab, onTab, alertCount, children }: Props) {
+export function AppShell({
+  tab,
+  onTab,
+  alertCount,
+  children,
+  tenantName = "检验科",
+  tenantRole,
+  userName = "",
+  userEmail = "",
+  canManageMembers = false,
+  canManageTenants = false,
+  onInvite,
+  onManageTenants,
+  onSignOut,
+}: Props) {
   return (
     <div className="flex h-dvh max-h-dvh w-full overflow-hidden bg-bg pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       <aside className="hidden h-full w-56 shrink-0 flex-col border-r border-border bg-surface md:flex lg:w-60">
@@ -64,7 +88,53 @@ export function AppShell({ tab, onTab, alertCount, children }: Props) {
                 <span className="hidden md:inline">{TITLES[tab]}</span>
               </h1>
             </div>
-            <span className="rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted">检验科</span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <span className="max-w-32 truncate rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted" title={tenantName}>
+                {tenantName}
+              </span>
+              {userName || userEmail ? (
+                <span
+                  className="max-w-28 truncate rounded-full border border-primary/30 bg-primary-soft px-2.5 py-1 text-xs font-medium text-primary"
+                  title={userEmail || userName}
+                >
+                  {userName || userEmail}
+                </span>
+              ) : null}
+              {tenantRole ? <span className="hidden text-xs text-subtle sm:inline">{tenantRole === "admin" ? "管理员" : "员工"}</span> : null}
+              {canManageMembers && onInvite ? (
+                <button
+                  type="button"
+                  className="flex size-10 items-center justify-center rounded-md text-primary hover:bg-primary-soft"
+                  aria-label="邀请员工"
+                  title="邀请员工"
+                  onClick={onInvite}
+                >
+                  <UserPlus className="size-4" />
+                </button>
+              ) : null}
+              {canManageTenants && onManageTenants ? (
+                <button
+                  type="button"
+                  className="flex size-10 items-center justify-center rounded-md text-primary hover:bg-primary-soft"
+                  aria-label="平台科室管理"
+                  title="平台科室管理"
+                  onClick={onManageTenants}
+                >
+                  <Building2 className="size-4" />
+                </button>
+              ) : null}
+              {onSignOut ? (
+                <button
+                  type="button"
+                  className="flex size-10 items-center justify-center rounded-md text-subtle hover:bg-bg-elevated hover:text-fg"
+                  aria-label="退出登录"
+                  title="退出登录"
+                  onClick={onSignOut}
+                >
+                  <LogOut className="size-4" />
+                </button>
+              ) : null}
+            </div>
           </div>
         </header>
 
@@ -97,14 +167,12 @@ export function AppShell({ tab, onTab, alertCount, children }: Props) {
 
 function BrandMark() {
   return (
-    <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary text-primary-fg">
-      <svg viewBox="0 0 32 32" className="size-5" aria-hidden>
-        <path
-          fill="currentColor"
-          d="M16 4.8l8.2 3.3v8.4c0 4.9-3.4 8.6-8.2 10.3C10.2 25.1 6.8 21.4 6.8 16.5V8.1L16 4.8z"
-        />
-      </svg>
-    </div>
+    <img
+      src={`${import.meta.env.BASE_URL}__grok/icon-180.png`}
+      alt=""
+      aria-hidden="true"
+      className="size-9 shrink-0 rounded-md object-cover"
+    />
   );
 }
 

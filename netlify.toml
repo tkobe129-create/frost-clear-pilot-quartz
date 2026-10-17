@@ -8,8 +8,8 @@
   NETLIFY = "true"
 
 # TanStack Start + Nitro generates the Netlify server/function output during build.
-# Supabase remains the application's external data service; no DATABASE_URL is
-# required for this deployment because the app uses Supabase rather than pg.
+# Authentication and business data use Supabase directly; this deployment
+# does not require a separate PostgreSQL connection string.
 
 [[headers]]
   for = "/assets/*"

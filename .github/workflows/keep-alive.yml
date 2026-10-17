@@ -1,0 +1,29 @@
+name: Keep Supabase Alive
+
+on:
+  schedule:
+    # 国际标准时间每周一、周四上午 09:00 自动触发（北京时间 17:00）
+    # 频率为 3~4 天一次，远低于 7 天休眠门槛，安全稳妥
+    - cron: '0 9 * * 1,4'
+  workflow_dispatch: # 支持在 GitHub Actions 页面手动点击测试
+
+jobs:
+  ping:
+    name: Ping Supabase Database
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send keep-alive ping to Supabase REST API
+        run: |
+          RESPONSE=$(curl -s -w "%{http_code}" -o /dev/null -X GET \
+            "https://eqgrtoeivuykemfferwb.supabase.co/rest/v1/reagents?select=id&limit=1" \
+            -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVxZ3J0b2VpdnV5a2VtZmZlcndiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1Njc0OTQsImV4cCI6MjEwNTE0MzQ5NH0.Jttf6wm6RVj2knEagvw3Y-wFrKTl5I5RvF4pVUqHVRA" \
+            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVxZ3J0b2VpdnV5a2VtZmZlcndiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1Njc0OTQsImV4cCI6MjEwNTE0MzQ5NH0.Jttf6wm6RVj2knEagvw3Y-wFrKTl5I5RvF4pVUqHVRA")
+
+          echo "Supabase HTTP response code: $RESPONSE"
+          # 200 (成功读取) 或 206 (部分数据) 均代表数据库真实响应并重置休眠计时
+          if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 206 ]; then
+            echo "✅ Supabase is alive and activity timer is reset!"
+          else
+            echo "⚠️ Unexpected status code: $RESPONSE"
+            exit 1
+          fi

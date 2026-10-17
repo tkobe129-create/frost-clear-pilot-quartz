@@ -1,22 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, Minus, Plus, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Minus, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ScannerOverlay } from "@/components/scanner-overlay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { buildDemoBarcode, matchReagentByScan, parseBarcode, stripSymbologyId, SUPPORTED_FORMATS } from "@/lib/scanner";
-import type { ExtractedFields, PendingItem, Reagent, StockType } from "@/lib/types";
+import { matchReagentByScan, parseBarcode, stripSymbologyId } from "@/lib/scanner";
+import { announceScanSuccess, unlockScanAudio } from "@/lib/scan-feedback";
+import { chooseFefoBatch, reconstructAvailableBatches } from "@/lib/stock-batches";
+import type { ExtractedFields, PendingItem, Reagent, StockBatch, StockRecord, StockType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Props = {
   reagents: Reagent[];
+  records: StockRecord[];
+  stockBatches?: StockBatch[];
   submitting: boolean;
   onSubmit: (type: StockType, items: PendingItem[]) => Promise<void>;
 };
 
-export function ScanView({ reagents, submitting, onSubmit }: Props) {
+export function ScanView({ reagents, records, stockBatches, submitting, onSubmit }: Props) {
+  const fefoBatches = stockBatches ?? reagents.flatMap((reagent) => reconstructAvailableBatches(reagent, records));
   const [tab, setTab] = useState<StockType>("in");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [raw, setRaw] = useState("");
@@ -30,13 +35,13 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [flash, setFlash] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Keep latest pending & tab for continuous auto-add without stale closure.
-  const pendingRef = useRef(pending);
-  const tabRef = useRef(tab);
+  // Scans can arrive before React paints the previous result. Keep refs as the
+  // synchronous source of truth so rapid scanner-gun events never overwrite a
+  // previous item or read an old stock direction.
+  const pendingRef = useRef<PendingItem[]>([]);
+  const tabRef = useRef<StockType>(tab);
   pendingRef.current = pending;
   tabRef.current = tab;
-
-  const demos = useMemo(() => reagents.slice(0, 6), [reagents]);
 
   function clearMatch() {
     setMatched(null);
@@ -51,52 +56,66 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
 
   function addContinuousItem(
     reagent: Reagent,
-    details: { lotNumber: string; expiryDate: string; productionDate: string },
+    details: { lotNumber: string; expiryDate: string; productionDate: string; fefo?: boolean },
   ) {
-    let exceeded = false;
-    setPending((list) => {
-      const sameItem = list.find(
-        (item) =>
-          item.reagentId === reagent.id &&
-          item.lotNumber === details.lotNumber &&
-          item.expiryDate === details.expiryDate &&
-          item.productionDate === details.productionDate,
-      );
-      const already = list.filter((item) => item.reagentId === reagent.id).reduce((sum, item) => sum + item.quantity, 0);
+    const list = pendingRef.current;
+    const sameItem = list.find(
+      (item) =>
+        item.reagentId === reagent.id &&
+        item.lotNumber === details.lotNumber &&
+        item.expiryDate === details.expiryDate &&
+        item.productionDate === details.productionDate,
+    );
+    const already = list.filter((item) => item.reagentId === reagent.id).reduce((sum, item) => sum + item.quantity, 0);
 
-      if (tabRef.current === "out" && already + 1 > reagent.stockQuantity) {
-        exceeded = true;
-        return list;
-      }
-
-      const next = sameItem
-        ? list.map((item) => (item.key === sameItem.key ? { ...item, quantity: item.quantity + 1 } : item))
-        : [
-            ...list,
-            {
-              key: `${reagent.id}-${Date.now()}-${list.length}`,
-              reagentId: reagent.id,
-              reagentName: reagent.name,
-              unit: reagent.unit,
-              quantity: 1,
-              lotNumber: details.lotNumber,
-              expiryDate: details.expiryDate,
-              productionDate: details.productionDate,
-              note: "",
-              stockQuantity: reagent.stockQuantity,
-            },
-          ];
-      // Keep rapid scanner-keyboard events in sync even before React renders again.
-      pendingRef.current = next;
-      return next;
-    });
-
-    if (exceeded) {
+    if (tabRef.current === "out" && already + 1 > reagent.stockQuantity) {
       toast.error(`出库数量超过可用库存 · ${reagent.name}`);
       return false;
     }
-    toast.success(`已加入 ${reagent.name} ×1，可继续扫码`);
+
+    const accumulatedQuantity = sameItem ? sameItem.quantity + 1 : 1;
+    const next = sameItem
+      ? list.map((item) =>
+          item.key === sameItem.key ? { ...item, quantity: accumulatedQuantity } : item,
+        )
+      : [
+          ...list,
+          {
+            key: `${reagent.id}-${Date.now()}-${list.length}`,
+            reagentId: reagent.id,
+            reagentName: reagent.name,
+            unit: reagent.unit,
+            quantity: accumulatedQuantity,
+            lotNumber: details.lotNumber,
+            expiryDate: details.expiryDate,
+            productionDate: details.productionDate,
+            note: "",
+            stockQuantity: reagent.stockQuantity,
+          },
+        ];
+
+    // Update both stores immediately. React may batch several scan events into
+    // one render, but the next event still sees every item scanned so far.
+    pendingRef.current = next;
+    setPending(next);
+    announceScanSuccess(accumulatedQuantity, reagent.unit);
+    // Reuse one toast so rapid continuous scans show the accumulated quantity
+    // instead of stacking several misleading "×1" messages.
+    toast.success(
+      `${details.fefo ? "按最早效期批次 · " : ""}已加入 ${reagent.name} ×${accumulatedQuantity}，可继续扫码`,
+      {
+        id: "continuous-scan-feedback",
+        duration: 1400,
+      },
+    );
     return true;
+  }
+
+  function changeTab(next: StockType) {
+    tabRef.current = next;
+    setTab(next);
+    unlockScanAudio();
+    setCameraOpen(true);
   }
 
   function applyMatch(code: string, options?: { continuous?: boolean }) {
@@ -105,9 +124,28 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
     setRaw(cleaned);
     const result = matchReagentByScan(cleaned, reagents);
     if (result) {
-      const lot = result.fields.lotNumber || result.reagent.lotNumber || "";
-      const exp = result.fields.expiryDateFormatted || result.reagent.expiryDate || "";
-      const prod = result.fields.productionDateFormatted || result.reagent.productionDate || "";
+      let lot = result.fields.lotNumber || result.reagent.lotNumber || "";
+      let exp = result.fields.expiryDateFormatted || result.reagent.expiryDate || "";
+      let prod = result.fields.productionDateFormatted || result.reagent.productionDate || "";
+      let fefoApplied = false;
+
+      // A GTIN-only scan does not identify a batch. For outbound stock, fill
+      // the missing batch from the earliest available expiry (FEFO) instead of
+      // silently using an arbitrary/default lot.
+      if (
+        tabRef.current === "out" &&
+        !result.fields.lotNumber &&
+        !result.fields.expiryDate &&
+        !result.fields.expiryDateFormatted
+      ) {
+        const batch = chooseFefoBatch(result.reagent, fefoBatches, pendingRef.current);
+        if (batch) {
+          lot = batch.lotNumber;
+          exp = batch.expiryDate;
+          prod = batch.productionDate;
+          fefoApplied = true;
+        }
+      }
 
       setMatched(result.reagent);
       setFields(result.fields);
@@ -117,17 +155,29 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
       setFlash(true);
       window.setTimeout(() => setFlash(false), 420);
 
+      // 入库时如果是普通一维码/EAN码（不含批号效期），自适应暂停连扫并弹出卡片补录
+      const isInboundWithoutBatch =
+        tabRef.current === "in" &&
+        !result.fields.lotNumber &&
+        !result.fields.expiryDate &&
+        !result.fields.expiryDateFormatted;
+
       // Camera and scanner-gun continuous mode: add immediately, merge repeated
       // scans of the same reagent/lot, and leave the input ready for the next scan.
-      if (options?.continuous) {
-        if (addContinuousItem(result.reagent, { lotNumber: lot, expiryDate: exp, productionDate: prod })) {
+      if (options?.continuous && !isInboundWithoutBatch) {
+        if (addContinuousItem(result.reagent, { lotNumber: lot, expiryDate: exp, productionDate: prod, fefo: fefoApplied })) {
           clearMatch();
           window.setTimeout(() => inputRef.current?.focus(), 0);
         }
         return;
       }
 
-      toast.success(`已匹配 ${result.reagent.name}`);
+      if (isInboundWithoutBatch) {
+        setCameraOpen(false);
+        toast.info(`已识别 ${result.reagent.name}，请补充包装上的批号与效期`, { duration: 3000 });
+      } else {
+        toast.success(`已匹配 ${result.reagent.name}`);
+      }
     } else {
       setMatched(null);
       setFields({});
@@ -145,14 +195,15 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
       toast.error("请输入有效数量");
       return;
     }
-    if (tab === "out") {
-      const already = pending.filter((p) => p.reagentId === matched.id).reduce((s, p) => s + p.quantity, 0);
+    const list = pendingRef.current;
+    if (tabRef.current === "out") {
+      const already = list.filter((p) => p.reagentId === matched.id).reduce((s, p) => s + p.quantity, 0);
       if (qty > matched.stockQuantity - already) {
         toast.error("出库数量超过可用库存");
         return;
       }
     }
-    setPending((list) => [
+    const next = [
       ...list,
       {
         key: `${matched.id}-${Date.now()}`,
@@ -166,20 +217,56 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
         note,
         stockQuantity: matched.stockQuantity,
       },
-    ]);
+    ];
+    pendingRef.current = next;
+    setPending(next);
+    announceScanSuccess(qty, matched.unit);
     toast.success("已加入待提交");
     clearMatch();
     inputRef.current?.focus();
   }
 
+  function updatePendingQuantity(key: string, rawValue: string) {
+    const item = pendingRef.current.find((entry) => entry.key === key);
+    if (!item) return;
+    const quantity = Math.max(0, Math.floor(Number(rawValue) || 0));
+    if (tabRef.current === "out") {
+      const otherPending = pendingRef.current
+        .filter((entry) => entry.reagentId === item.reagentId && entry.key !== key)
+        .reduce((sum, entry) => sum + entry.quantity, 0);
+      if (quantity + otherPending > item.stockQuantity) {
+        toast.error(`出库数量不能超过库存 · ${item.reagentName}`);
+        return;
+      }
+    }
+    const next = pendingRef.current.map((entry) => (entry.key === key ? { ...entry, quantity } : entry));
+    pendingRef.current = next;
+    setPending(next);
+  }
+
   async function submit() {
-    if (pending.length === 0) {
+    const items = pendingRef.current;
+    if (items.length === 0) {
       toast.error("没有待提交的记录");
       return;
     }
-    await onSubmit(tab, pending);
-    setPending([]);
-    pendingRef.current = [];
+    if (items.some((item) => !Number.isInteger(item.quantity) || item.quantity <= 0)) {
+      toast.error("请把待提交数量修改为大于 0 的整数");
+      return;
+    }
+    const submittedType = tabRef.current;
+    const submittedQuantities = new Map(items.map((item) => [item.key, item.quantity]));
+    await onSubmit(submittedType, items);
+
+    // Keep scans that arrived while the batch was being submitted. This is
+    // important when the camera stays open for a truly continuous workflow.
+    const remaining = pendingRef.current.flatMap((item) => {
+      const submittedQuantity = submittedQuantities.get(item.key) ?? 0;
+      const quantity = item.quantity - submittedQuantity;
+      return quantity > 0 ? [{ ...item, quantity }] : [];
+    });
+    pendingRef.current = remaining;
+    setPending(remaining);
   }
 
   useEffect(() => {
@@ -197,7 +284,7 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reagents]);
+  }, [reagents, records, stockBatches]);
 
   const segments = raw ? parseBarcode(raw) : [];
 
@@ -209,9 +296,9 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
             <button
               key={id}
               type="button"
-              onClick={() => setTab(id)}
+              onClick={() => changeTab(id)}
               className={cn(
-                "h-11 rounded-md text-sm font-medium transition-colors",
+                "h-16 rounded-md text-lg font-semibold transition-colors sm:h-14",
                 tab === id ? (id === "in" ? "bg-primary text-primary-fg" : "bg-out text-primary-fg") : "text-muted",
               )}
             >
@@ -219,16 +306,13 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
             </button>
           ))}
         </div>
-
-        <section className={cn("rounded-xl border border-border bg-surface p-3 shadow-card sm:p-4", flash && "scan-flash")}>
-          <Button className="h-12 w-full" onClick={() => setCameraOpen(true)}>
-            <Camera className="size-4" />
-            打开摄像头连续扫码
-          </Button>
-          <p className="mt-3 text-xs text-subtle">
-            摄像头和扫码枪均支持连续扫码：识别成功后自动加入待提交，同种试剂会直接累加数量，无需逐次确认。
+        {tab === "out" ? (
+          <p className="rounded-lg bg-out-soft px-3 py-2 text-xs leading-5 text-out">
+            出库规则：优先选择最早有效期批次（FEFO）；条码包含批号时按条码批次执行。
           </p>
-          <p className="mt-1 break-words text-xs leading-5 text-subtle">{SUPPORTED_FORMATS.join(" · ")}</p>
+        ) : null}
+
+        <section className={cn("hidden rounded-xl border border-border bg-surface p-3 shadow-card md:block md:p-4", flash && "scan-flash")}>
           <Label className="mt-3 block">扫码结果 / 扫码枪输入</Label>
           <Input
             ref={inputRef}
@@ -242,22 +326,11 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
+                unlockScanAudio();
                 applyMatch(raw, { continuous: true });
               }
             }}
           />
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {demos.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => applyMatch(buildDemoBarcode(r), { continuous: true })}
-                className="rounded-full border border-border bg-bg-elevated px-2.5 py-1 text-xs text-muted"
-              >
-                示例 · {r.name.replace(/测定试剂盒|测定试剂|试剂盒/g, "")}
-              </button>
-            ))}
-          </div>
         </section>
 
         {segments.length > 0 ? (
@@ -320,8 +393,8 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
                 </div>
               </div>
               <Field label="批号" value={lotNumber} onChange={setLotNumber} />
-              <Field label="有效期" value={expiryDate} onChange={setExpiryDate} placeholder="YYYY-MM-DD" />
-              <Field label="生产日期" value={productionDate} onChange={setProductionDate} placeholder="YYYY-MM-DD" />
+              <DateField label="有效期" value={expiryDate} onChange={setExpiryDate} />
+              <DateField label="生产日期" value={productionDate} onChange={setProductionDate} />
               <Field label="备注" value={note} onChange={setNote} />
             </div>
 
@@ -354,14 +427,26 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
                     {p.lotNumber || "无批号"} · {p.expiryDate || "无效期"}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium tabular">
-                    {p.quantity} {p.unit}
-                  </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Input
+                    aria-label={`${p.reagentName}数量`}
+                    className="h-10 w-20 px-2 text-center text-sm font-medium tabular"
+                    inputMode="numeric"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={p.quantity}
+                    onChange={(event) => updatePendingQuantity(p.key, event.target.value)}
+                  />
+                  <span className="text-xs text-subtle">{p.unit}</span>
                   <button
                     type="button"
-                    className="flex size-11 items-center justify-center text-subtle"
-                    onClick={() => setPending((list) => list.filter((x) => x.key !== p.key))}
+                    className="flex size-10 items-center justify-center text-subtle"
+                    onClick={() => {
+                      const next = pendingRef.current.filter((x) => x.key !== p.key);
+                      pendingRef.current = next;
+                      setPending(next);
+                    }}
                     aria-label="移除"
                   >
                     <Trash2 className="size-4" />
@@ -385,7 +470,69 @@ export function ScanView({ reagents, submitting, onSubmit }: Props) {
         open={cameraOpen}
         onClose={() => setCameraOpen(false)}
         onDetect={(code) => {
+          // Mobile browsers may suspend Web Audio again while the camera stream
+          // is active, so resume it on every camera detection as well as when
+          // the overlay is opened.
+          unlockScanAudio();
           applyMatch(code, { continuous: true });
+        }}
+      />
+    </div>
+  );
+}
+
+function formatQuickDate(input: string): string {
+  const raw = input.trim();
+  // If user already typed or has formatted date (e.g. 2026-10-18)
+  if (raw.includes("-")) {
+    const parts = raw.split("-").map((p) => p.trim());
+    if (parts.length === 3 && parts[0].length === 4) {
+      return `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}`;
+    }
+    return raw;
+  }
+
+  const digits = raw.replace(/\D/g, "");
+  // Only accept 8 digits: YYYYMMDD -> YYYY-MM-DD (e.g. 20261018 -> 2026-10-18)
+  if (digits.length === 8) {
+    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+  }
+  return raw;
+}
+
+function DateField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="min-w-0">
+      <Label>{label}</Label>
+      <Input
+        className="mt-1 font-mono tabular"
+        inputMode="numeric"
+        placeholder="输入8位数字如 20261018"
+        maxLength={10}
+        value={value}
+        onChange={(e) => {
+          const val = e.target.value;
+          const cleaned = val.replace(/\D/g, "");
+          // Exactly 8 digits typed: format immediately to YYYY-MM-DD
+          if (cleaned.length === 8 && !val.includes("-")) {
+            onChange(`${cleaned.slice(0, 4)}-${cleaned.slice(4, 6)}-${cleaned.slice(6, 8)}`);
+          } else {
+            onChange(val);
+          }
+        }}
+        onBlur={(e) => {
+          const formatted = formatQuickDate(e.target.value);
+          if (formatted !== e.target.value) {
+            onChange(formatted);
+          }
         }}
       />
     </div>

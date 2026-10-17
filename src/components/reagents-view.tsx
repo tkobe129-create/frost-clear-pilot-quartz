@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Camera, ChevronRight, Plus, Search } from "lucide-react";
+import { ArrowLeft, Camera, ChevronRight, FolderOpen, Plus, Search } from "lucide-react";
 import { toast } from "sonner";
 import { ScannerOverlay } from "@/components/scanner-overlay";
 import { Badge } from "@/components/ui/badge";
@@ -112,22 +112,64 @@ export function ReagentsView({
   reagents,
   saving,
   onSave,
+  onAdjustStock,
+  canManage = true,
 }: {
   reagents: Reagent[];
   saving: boolean;
   onSave: (data: SavePayload) => Promise<void>;
+  onAdjustStock?: (params: {
+    reagentId: number;
+    actualStock: number;
+    lotNumber: string;
+    expiryDate: string;
+    reason: string;
+  }) => Promise<void>;
+  canManage?: boolean;
 }) {
   const [q, setQ] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
 
+  // 盘点纠偏弹窗状态
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [adjustActualStock, setAdjustActualStock] = useState("");
+  const [adjustLotNumber, setAdjustLotNumber] = useState("");
+  const [adjustExpiryDate, setAdjustExpiryDate] = useState("");
+  const [adjustReason, setAdjustReason] = useState("日常盘点纠偏");
+  const [adjusting, setAdjusting] = useState(false);
+
+  const categorySummaries = useMemo(() => {
+    const grouped = new Map<string, { category: string; reagents: Reagent[]; totalStock: number; lowCount: number; outCount: number }>();
+    for (const reagent of reagents) {
+      const category = reagent.category.trim() || "未分类";
+      const current = grouped.get(category) ?? { category, reagents: [], totalStock: 0, lowCount: 0, outCount: 0 };
+      current.reagents.push(reagent);
+      current.totalStock += reagent.stockQuantity;
+      if (reagent.minStock > 0 && reagent.stockQuantity <= reagent.minStock) current.lowCount += 1;
+      if (reagent.stockQuantity === 0) current.outCount += 1;
+      grouped.set(category, current);
+    }
+    return Array.from(grouped.values()).sort((a, b) => {
+      const ai = CATEGORIES.indexOf(a.category as (typeof CATEGORIES)[number]);
+      const bi = CATEGORIES.indexOf(b.category as (typeof CATEGORIES)[number]);
+      return (ai < 0 ? CATEGORIES.length : ai) - (bi < 0 ? CATEGORIES.length : bi) || a.category.localeCompare(b.category, "zh-CN");
+    });
+  }, [reagents]);
+
+  const categoryReagents = useMemo(
+    () => categorySummaries.find((group) => group.category === selectedCategory)?.reagents ?? [],
+    [categorySummaries, selectedCategory],
+  );
+
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
-    if (!s) return reagents;
-    return reagents.filter((r) =>
-      [r.name, r.code, r.manufacturer, r.category, r.location, r.lotNumber].join(" ").toLowerCase().includes(s),
+    if (!s) return categoryReagents;
+    return categoryReagents.filter((r) =>
+      [r.name, r.code, r.manufacturer, r.location, r.lotNumber].join(" ").toLowerCase().includes(s),
     );
-  }, [q, reagents]);
+  }, [categoryReagents, q]);
 
   function applyBarcode(code: string) {
     if (!draft) return;
@@ -158,6 +200,11 @@ export function ReagentsView({
       toast.error("请填写 GTIN 和试剂名称");
       return;
     }
+    const openingStock = Number(draft.stockQuantity);
+    if (!draft.id && (!Number.isSafeInteger(openingStock) || openingStock < 0)) {
+      toast.error("期初库存必须是大于或等于 0 的整数");
+      return;
+    }
     let scanSegments: Reagent["scanSegments"] = [];
     try {
       scanSegments = JSON.parse(draft.scanSegmentsText || "[]") as Reagent["scanSegments"];
@@ -173,7 +220,7 @@ export function ReagentsView({
       specification: draft.specification,
       manufacturer: draft.manufacturer,
       unit: draft.unit,
-      stockQuantity: Number(draft.stockQuantity) || 0,
+      stockQuantity: draft.id ? 0 : openingStock,
       minStock: Number(draft.minStock) || 0,
       storageCondition: draft.storageCondition,
       location: draft.location,
@@ -188,6 +235,7 @@ export function ReagentsView({
       supplier: draft.supplier,
       unitPrice: Number(draft.unitPrice) || 0,
     });
+    if (selectedCategory) setSelectedCategory(draft.category.trim() || "未分类");
     setDraft(null);
   }
 
@@ -221,12 +269,40 @@ export function ReagentsView({
           />
           <Field label="规格" value={draft.specification} onChange={(v) => setDraft({ ...draft, specification: v })} />
           <Field label="厂家" value={draft.manufacturer} onChange={(v) => setDraft({ ...draft, manufacturer: v })} />
-          <Field
-            label="当前库存"
-            value={draft.stockQuantity}
-            onChange={(v) => setDraft({ ...draft, stockQuantity: v })}
-            inputMode="numeric"
-          />
+          {draft.id ? (
+            <div className="min-w-0">
+              <div className="flex items-center justify-between">
+                <Label>当前库存</Label>
+                {canManage && onAdjustStock ? (
+                  <button
+                    type="button"
+                    className="text-xs font-semibold text-primary underline underline-offset-2 hover:opacity-80"
+                    onClick={() => {
+                      setAdjustActualStock(draft.stockQuantity);
+                      setAdjustLotNumber(draft.lotNumber);
+                      setAdjustExpiryDate(draft.expiryDate);
+                      setAdjustReason("日常盘点纠偏");
+                      setAdjustOpen(true);
+                    }}
+                  >
+                    盘点纠偏
+                  </button>
+                ) : null}
+              </div>
+              <div className="mt-1 flex h-11 items-center justify-between rounded-md border border-border bg-bg-elevated px-3 text-sm tabular">
+                <span className="font-semibold text-fg">{draft.stockQuantity}</span>
+                <span className="text-xs text-muted">{draft.unit}</span>
+              </div>
+              <p className="mt-1 text-xs leading-5 text-muted">账实不符时请点击上方「盘点纠偏」，系统将自动生成盘盈/盘亏审计记录。</p>
+            </div>
+          ) : (
+            <Field
+              label="期初库存"
+              value={draft.stockQuantity}
+              onChange={(v) => setDraft({ ...draft, stockQuantity: v })}
+              inputMode="numeric"
+            />
+          )}
           <Field
             label="安全库存"
             value={draft.minStock}
@@ -240,13 +316,12 @@ export function ReagentsView({
             onChange={(v) => setDraft({ ...draft, storageCondition: v })}
           />
           <Field label="货位" value={draft.location} onChange={(v) => setDraft({ ...draft, location: v })} />
-          <Field
+          <DateField
             label="有效期"
             value={draft.expiryDate}
             onChange={(v) => setDraft({ ...draft, expiryDate: v })}
-            placeholder="YYYY-MM-DD"
           />
-          <Field
+          <DateField
             label="生产日期"
             value={draft.productionDate}
             onChange={(v) => setDraft({ ...draft, productionDate: v })}
@@ -282,6 +357,130 @@ export function ReagentsView({
         <Button className="h-12" disabled={saving} onClick={() => void save()}>
           {saving ? "保存中…" : draft.id ? "更新试剂" : "保存预录"}
         </Button>
+
+        {adjustOpen && draft.id ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-2xl">
+              <h3 className="text-lg font-semibold">日常盘点与库存纠偏</h3>
+              <p className="mt-1 text-xs text-muted">
+                对【{draft.name}】进行账实对齐。系统将自动生成盘盈或盘亏审计流水。
+              </p>
+
+              <div className="mt-4 flex flex-col gap-3">
+                <div className="flex items-center justify-between rounded-lg bg-bg-elevated p-3 text-sm">
+                  <span className="text-muted">当前账面库存</span>
+                  <span className="font-semibold">{draft.stockQuantity} {draft.unit}</span>
+                </div>
+
+                <label className="text-sm font-medium">
+                  实际盘点库存 ({draft.unit})
+                  <Input
+                    className="mt-1 h-11 text-base font-semibold"
+                    type="number"
+                    min="0"
+                    placeholder="输入实物盘点数量"
+                    value={adjustActualStock}
+                    onChange={(e) => setAdjustActualStock(e.target.value)}
+                  />
+                </label>
+
+                {(() => {
+                  const actual = Number(adjustActualStock);
+                  const current = Number(draft.stockQuantity);
+                  if (!Number.isFinite(actual) || actual < 0 || adjustActualStock.trim() === "") return null;
+                  const diff = actual - current;
+                  return (
+                    <div className={cn(
+                      "rounded-lg p-2.5 text-xs font-medium",
+                      diff > 0 ? "bg-ok/10 text-ok" : diff < 0 ? "bg-warn/10 text-warn" : "bg-bg-elevated text-muted"
+                    )}>
+                      {diff > 0
+                        ? `差异：盘盈 +${diff} ${draft.unit}（将生成盘盈入库流水）`
+                        : diff < 0
+                        ? `差异：盘亏 ${diff} ${draft.unit}（将生成盘亏出库流水）`
+                        : "账实一致，无需调整"}
+                    </div>
+                  );
+                })()}
+
+                <label className="text-sm font-medium">
+                  纠偏批号（选填）
+                  <Input
+                    className="mt-1"
+                    placeholder="不填则使用试剂默认批号"
+                    value={adjustLotNumber}
+                    onChange={(e) => setAdjustLotNumber(e.target.value)}
+                  />
+                </label>
+
+                <div className="min-w-0">
+                  <DateField
+                    label="效期（选填）"
+                    value={adjustExpiryDate}
+                    onChange={setAdjustExpiryDate}
+                  />
+                </div>
+
+                <label className="text-sm font-medium">
+                  盘点原因 / 说明
+                  <Input
+                    className="mt-1"
+                    placeholder="例如：月度例行盘点、破损报损、上机损耗"
+                    value={adjustReason}
+                    onChange={(e) => setAdjustReason(e.target.value)}
+                  />
+                </label>
+
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="flex-1"
+                    disabled={adjusting}
+                    onClick={() => setAdjustOpen(false)}
+                  >
+                    取消
+                  </Button>
+                  <Button
+                    className="flex-1"
+                    disabled={
+                      adjusting ||
+                      adjustActualStock.trim() === "" ||
+                      Number(adjustActualStock) < 0 ||
+                      Number(adjustActualStock) === Number(draft.stockQuantity)
+                    }
+                    onClick={async () => {
+                      if (!onAdjustStock || !draft.id) return;
+                      const nextQty = Number(adjustActualStock);
+                      if (!Number.isFinite(nextQty) || nextQty < 0) {
+                        toast.error("请输入有效的盘点库存数量");
+                        return;
+                      }
+                      setAdjusting(true);
+                      try {
+                        await onAdjustStock({
+                          reagentId: draft.id,
+                          actualStock: nextQty,
+                          lotNumber: adjustLotNumber,
+                          expiryDate: adjustExpiryDate,
+                          reason: adjustReason,
+                        });
+                        setDraft({ ...draft, stockQuantity: String(nextQty) });
+                        setAdjustOpen(false);
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : "盘点纠偏失败");
+                      } finally {
+                        setAdjusting(false);
+                      }
+                    }}
+                  >
+                    {adjusting ? "提交中…" : "确认纠偏"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         <ScannerOverlay
           open={cameraOpen}
           onClose={() => setCameraOpen(false)}
@@ -294,18 +493,96 @@ export function ReagentsView({
     );
   }
 
+  if (!selectedCategory) {
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">试剂分类</h2>
+            <p className="mt-0.5 text-xs text-muted">请选择类别查看该组试剂和总库存</p>
+          </div>
+          {canManage ? (
+            <Button className="shrink-0" onClick={() => setDraft(emptyDraft())}>
+              <Plus className="size-4" />
+              预录
+            </Button>
+          ) : null}
+        </div>
+
+        {categorySummaries.length > 0 ? (
+          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {categorySummaries.map((group) => (
+              <li key={group.category}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQ("");
+                    setSelectedCategory(group.category);
+                  }}
+                  className="flex w-full items-center gap-3 rounded-xl border border-border bg-surface px-4 py-4 text-left shadow-card transition-colors hover:border-primary/40 hover:bg-primary-soft/30"
+                >
+                  <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary">
+                    <FolderOpen className="size-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold">{group.category}</span>
+                    <span className="mt-1 block text-xs text-muted">{group.reagents.length} 种试剂</span>
+                    <span className="mt-2 block text-xs text-subtle">
+                      库存合计 <strong className="font-semibold text-fg tabular">{group.totalStock}</strong>
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2 text-right">
+                    <span className="hidden text-xs text-subtle sm:block">
+                      {group.outCount > 0 ? `${group.outCount} 个缺货` : group.lowCount > 0 ? `${group.lowCount} 个低库存` : "库存正常"}
+                    </span>
+                    <ChevronRight className="size-4 text-subtle" />
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="rounded-xl border border-dashed border-border py-12 text-center text-sm text-muted">暂无试剂类别</p>
+        )}
+      </div>
+    );
+  }
+
+  const selectedTotalStock = categoryReagents.reduce((total, reagent) => total + reagent.stockQuantity, 0);
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex gap-2">
-        <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle" />
-          <Input className="pl-9" placeholder="搜索名称 / GTIN / 厂家" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="flex items-start gap-2">
+        <button
+          type="button"
+          className="flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2 text-sm text-muted hover:bg-bg-elevated hover:text-fg"
+          onClick={() => {
+            setQ("");
+            setSelectedCategory(null);
+          }}
+        >
+          <ArrowLeft className="size-4" />
+          分类
+        </button>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-sm font-semibold">{selectedCategory}</h2>
+          <p className="mt-0.5 text-xs text-muted">
+            {categoryReagents.length} 种试剂 · 库存合计 <strong className="font-semibold text-fg tabular">{selectedTotalStock}</strong>
+          </p>
         </div>
-        <Button className="shrink-0" onClick={() => setDraft(emptyDraft())}>
-          <Plus className="size-4" />
-          预录
-        </Button>
+        {canManage ? (
+          <Button className="shrink-0" onClick={() => setDraft(emptyDraft())}>
+            <Plus className="size-4" />
+            预录
+          </Button>
+        ) : null}
       </div>
+
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle" />
+        <Input className="pl-9" placeholder="搜索名称 / GTIN / 厂家" value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
+
       <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
         {filtered.map((r) => {
           const days = daysUntil(r.expiryDate);
@@ -316,8 +593,14 @@ export function ReagentsView({
             <li key={r.id}>
               <button
                 type="button"
-                onClick={() => setDraft(fromReagent(r))}
-                className="flex w-full items-center gap-3 rounded-xl border border-border bg-surface px-3 py-3 text-left shadow-card"
+                onClick={() => {
+                  if (canManage) setDraft(fromReagent(r));
+                  else toast.info("只有检验科管理员可以编辑试剂资料");
+                }}
+                className={cn(
+                  "flex w-full items-center gap-3 rounded-xl border border-border bg-surface px-3 py-3 text-left shadow-card",
+                  !canManage && "cursor-default",
+                )}
               >
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{r.name}</p>
@@ -325,7 +608,6 @@ export function ReagentsView({
                     {r.manufacturer} · {r.specification || "无规格"} · {r.location || "无货位"}
                   </p>
                   <div className="mt-1.5 flex flex-wrap gap-1">
-                    <Badge variant="muted">{r.category || "未分类"}</Badge>
                     {expired ? <Badge variant="danger">已过期</Badge> : null}
                     {expiring && !expired ? <Badge variant="warn">近效期</Badge> : null}
                     {low ? <Badge variant="warn">低库存</Badge> : null}
@@ -336,7 +618,7 @@ export function ReagentsView({
                   <p className={cn("text-base font-semibold tabular", low || r.stockQuantity === 0 ? "text-warn" : "text-fg")}>
                     {r.stockQuantity}
                   </p>
-                  <p className="text-xs text-subtle">{r.unit}</p>
+                  <p className="text-xs text-subtle">总库存 · {r.unit}</p>
                 </div>
                 <ChevronRight className="size-4 shrink-0 text-subtle" />
               </button>
@@ -345,6 +627,61 @@ export function ReagentsView({
         })}
       </ul>
       {filtered.length === 0 ? <p className="py-10 text-center text-sm text-muted">没有匹配的试剂</p> : null}
+    </div>
+  );
+}
+
+function formatQuickDate(input: string): string {
+  const raw = input.trim();
+  if (raw.includes("-")) {
+    const parts = raw.split("-").map((p) => p.trim());
+    if (parts.length === 3 && parts[0].length === 4) {
+      return `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}`;
+    }
+    return raw;
+  }
+  const digits = raw.replace(/\D/g, "");
+  // Only accept 8 digits: YYYYMMDD -> YYYY-MM-DD (e.g. 20261018 -> 2026-10-18)
+  if (digits.length === 8) {
+    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+  }
+  return raw;
+}
+
+function DateField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="min-w-0">
+      <Label>{label}</Label>
+      <Input
+        className="mt-1 font-mono tabular"
+        inputMode="numeric"
+        placeholder="输入8位数字如 20261018"
+        maxLength={10}
+        value={value}
+        onChange={(e) => {
+          const val = e.target.value;
+          const cleaned = val.replace(/\D/g, "");
+          if (cleaned.length === 8 && !val.includes("-")) {
+            onChange(`${cleaned.slice(0, 4)}-${cleaned.slice(4, 6)}-${cleaned.slice(6, 8)}`);
+          } else {
+            onChange(val);
+          }
+        }}
+        onBlur={(e) => {
+          const formatted = formatQuickDate(e.target.value);
+          if (formatted !== e.target.value) {
+            onChange(formatted);
+          }
+        }}
+      />
     </div>
   );
 }
