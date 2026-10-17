@@ -155,9 +155,16 @@ export function ScanView({ reagents, records, stockBatches, submitting, onSubmit
       setFlash(true);
       window.setTimeout(() => setFlash(false), 420);
 
+      // 入库时如果是普通一维码/EAN码（不含批号效期），自适应暂停连扫并弹出卡片补录
+      const isInboundWithoutBatch =
+        tabRef.current === "in" &&
+        !result.fields.lotNumber &&
+        !result.fields.expiryDate &&
+        !result.fields.expiryDateFormatted;
+
       // Camera and scanner-gun continuous mode: add immediately, merge repeated
       // scans of the same reagent/lot, and leave the input ready for the next scan.
-      if (options?.continuous) {
+      if (options?.continuous && !isInboundWithoutBatch) {
         if (addContinuousItem(result.reagent, { lotNumber: lot, expiryDate: exp, productionDate: prod, fefo: fefoApplied })) {
           clearMatch();
           window.setTimeout(() => inputRef.current?.focus(), 0);
@@ -165,7 +172,12 @@ export function ScanView({ reagents, records, stockBatches, submitting, onSubmit
         return;
       }
 
-      toast.success(`已匹配 ${result.reagent.name}`);
+      if (isInboundWithoutBatch) {
+        setCameraOpen(false);
+        toast.info(`已识别 ${result.reagent.name}，请补充包装上的批号与效期`, { duration: 3000 });
+      } else {
+        toast.success(`已匹配 ${result.reagent.name}`);
+      }
     } else {
       setMatched(null);
       setFields({});
