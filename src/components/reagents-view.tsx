@@ -641,14 +641,9 @@ function formatQuickDate(input: string): string {
     return raw;
   }
   const digits = raw.replace(/\D/g, "");
+  // Only accept 8 digits: YYYYMMDD -> YYYY-MM-DD (e.g. 20261018 -> 2026-10-18)
   if (digits.length === 8) {
     return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
-  }
-  if (digits.length === 6) {
-    return `20${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4, 6)}`;
-  }
-  if (digits.length === 4 && Number(digits.slice(0, 2)) >= 20) {
-    return `20${digits.slice(0, 2)}-${digits.slice(2, 4)}`;
   }
   return raw;
 }
@@ -668,15 +663,14 @@ function DateField({
       <Input
         className="mt-1 font-mono tabular"
         inputMode="numeric"
-        placeholder="纯数字如 20261018 或 261018"
+        placeholder="输入8位数字如 20261018"
+        maxLength={10}
         value={value}
         onChange={(e) => {
           const val = e.target.value;
           const cleaned = val.replace(/\D/g, "");
           if (cleaned.length === 8 && !val.includes("-")) {
             onChange(`${cleaned.slice(0, 4)}-${cleaned.slice(4, 6)}-${cleaned.slice(6, 8)}`);
-          } else if (cleaned.length === 6 && !val.includes("-") && val.length === 6) {
-            onChange(`20${cleaned.slice(0, 2)}-${cleaned.slice(2, 4)}-${cleaned.slice(4, 6)}`);
           } else {
             onChange(val);
           }

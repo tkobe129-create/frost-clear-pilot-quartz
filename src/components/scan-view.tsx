@@ -482,31 +482,20 @@ export function ScanView({ reagents, records, stockBatches, submitting, onSubmit
 }
 
 function formatQuickDate(input: string): string {
-  // If user already typed dashes (e.g. 2026-10-18), normalize/clean it
   const raw = input.trim();
+  // If user already typed or has formatted date (e.g. 2026-10-18)
   if (raw.includes("-")) {
     const parts = raw.split("-").map((p) => p.trim());
     if (parts.length === 3 && parts[0].length === 4) {
-      const y = parts[0];
-      const m = parts[1].padStart(2, "0");
-      const d = parts[2].padStart(2, "0");
-      return `${y}-${m}-${d}`;
+      return `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}`;
     }
     return raw;
   }
 
   const digits = raw.replace(/\D/g, "");
-  // 8 digits: YYYYMMDD -> YYYY-MM-DD (e.g. 20261018 -> 2026-10-18)
+  // Only accept 8 digits: YYYYMMDD -> YYYY-MM-DD (e.g. 20261018 -> 2026-10-18)
   if (digits.length === 8) {
     return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
-  }
-  // 6 digits: YYMMDD -> 20YY-MM-DD (e.g. 261018 -> 2026-10-18)
-  if (digits.length === 6) {
-    return `20${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4, 6)}`;
-  }
-  // 4 digits: YYMM or MMYY (if looks like 2026 -> year only, else if 2610 -> 2026-10)
-  if (digits.length === 4 && Number(digits.slice(0, 2)) >= 20) {
-    return `20${digits.slice(0, 2)}-${digits.slice(2, 4)}`;
   }
   return raw;
 }
@@ -526,16 +515,15 @@ function DateField({
       <Input
         className="mt-1 font-mono tabular"
         inputMode="numeric"
-        placeholder="如 20261018 或 261018"
+        placeholder="输入8位数字如 20261018"
+        maxLength={10}
         value={value}
         onChange={(e) => {
           const val = e.target.value;
-          // Format automatically if user finishes 8 or 6 digits
           const cleaned = val.replace(/\D/g, "");
+          // Exactly 8 digits typed: format immediately to YYYY-MM-DD
           if (cleaned.length === 8 && !val.includes("-")) {
             onChange(`${cleaned.slice(0, 4)}-${cleaned.slice(4, 6)}-${cleaned.slice(6, 8)}`);
-          } else if (cleaned.length === 6 && !val.includes("-") && val.length === 6) {
-            onChange(`20${cleaned.slice(0, 2)}-${cleaned.slice(2, 4)}-${cleaned.slice(4, 6)}`);
           } else {
             onChange(val);
           }
