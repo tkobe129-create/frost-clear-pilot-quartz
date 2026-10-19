@@ -128,17 +128,8 @@ function concatBytes(parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
-async function deflateRaw(data: Uint8Array): Promise<Uint8Array | null> {
-  if (typeof CompressionStream === "undefined") return null;
-  const stream = new CompressionStream("deflate-raw");
-  const writer = stream.writable.getWriter();
-  await writer.write(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer);
-  await writer.close();
-  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
-}
-
-/** Minimal OOXML zip. Uses deflate when the browser supports it, otherwise store. */
-async function zipXlsx(files: Array<{ name: string; data: Uint8Array }>): Promise<Uint8Array> {
+/** Uncompressed OOXML zip. iPhone Safari rejects the compressed download path. */
+function zipXlsx(files: Array<{ name: string; data: Uint8Array }>): Uint8Array {
   const now = new Date();
   const time = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
   const date = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
@@ -147,23 +138,21 @@ async function zipXlsx(files: Array<{ name: string; data: Uint8Array }>): Promis
   let offset = 0;
   for (const file of files) {
     const name = new TextEncoder().encode(file.name);
-    const compressed = (await deflateRaw(file.data)) ?? file.data;
-    const method = compressed === file.data ? 0 : 8;
     const crc = crc32(file.data);
-    const local = new Uint8Array(30 + name.length + compressed.length);
+    const local = new Uint8Array(30 + name.length + file.data.length);
     const view = new DataView(local.buffer);
     view.setUint32(0, 0x04034b50, true);
     view.setUint16(4, 20, true);
     view.setUint16(6, 0x0800, true);
-    view.setUint16(8, method, true);
+    view.setUint16(8, 0, true);
     view.setUint16(10, time, true);
     view.setUint16(12, date, true);
     view.setUint32(14, crc, true);
-    view.setUint32(18, compressed.length, true);
+    view.setUint32(18, file.data.length, true);
     view.setUint32(22, file.data.length, true);
     view.setUint16(26, name.length, true);
     local.set(name, 30);
-    local.set(compressed, 30 + name.length);
+    local.set(file.data, 30 + name.length);
     locals.push(local);
 
     const central = new Uint8Array(46 + name.length);
@@ -172,11 +161,11 @@ async function zipXlsx(files: Array<{ name: string; data: Uint8Array }>): Promis
     centralView.setUint16(4, 20, true);
     centralView.setUint16(6, 20, true);
     centralView.setUint16(8, 0x0800, true);
-    centralView.setUint16(10, method, true);
+    centralView.setUint16(10, 0, true);
     centralView.setUint16(12, time, true);
     centralView.setUint16(14, date, true);
     centralView.setUint32(16, crc, true);
-    centralView.setUint32(20, compressed.length, true);
+    centralView.setUint32(20, file.data.length, true);
     centralView.setUint32(24, file.data.length, true);
     centralView.setUint16(28, name.length, true);
     centralView.setUint32(42, offset, true);
@@ -346,7 +335,7 @@ function buildLedgerSheet(records: StockRecord[], filter: "all" | StockType): { 
   return { sheet, strings: sst };
 }
 
-export async function buildStockRecordsXlsx(records: StockRecord[], filter: "all" | StockType = "all"): Promise<Uint8Array> {
+export function buildStockRecordsXlsx(records: StockRecord[], filter: "all" | StockType = "all"): Uint8Array {
   const { sheet, strings } = buildLedgerSheet(records, filter);
   const encode = (xml: string) => new TextEncoder().encode(xml);
   return zipXlsx([
@@ -391,27 +380,45 @@ export async function buildStockRecordsXlsx(records: StockRecord[], filter: "all
   ]);
 }
 
-function downloadBinary(filename: string, bytes: Uint8Array, mime: string) {
-  const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+function fileBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
+function downloadFile(file: File) {
+  const url = URL.createObjectURL(file);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = file.name;
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+export type ExportSaveResult = "shared" | "downloaded" | "cancelled";
+
 /**
- * Downloads a real .xlsx workbook. The previous .xls file was XML text, which
- * iPhone Safari displayed as source code instead of a table.
+ * Saves a real .xlsx file. On iPhone this must run inside the tap handler:
+ * Safari blocks a download that starts after an earlier network request.
  */
-export async function exportStockRecordsExcel(records: StockRecord[], filter: "all" | StockType = "all"): Promise<boolean> {
-  if (typeof document === "undefined" || records.length === 0) return false;
-  const bytes = await buildStockRecordsXlsx(records, filter);
-  downloadBinary(
-    `权盾智检-出入库记录-${recordScope(filter)}-${fileStamp()}.xlsx`,
-    bytes,
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  );
-  return true;
+export function saveStockRecordsExcel(records: StockRecord[], filter: "all" | StockType = "all"): Promise<ExportSaveResult> {
+  if (typeof document === "undefined" || records.length === 0) return Promise.resolve("cancelled");
+  const bytes = buildStockRecordsXlsx(records, filter);
+  const filename = `权盾智检-出入库记录-${recordScope(filter)}-${fileStamp()}.xlsx`;
+  const mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const file = new File([fileBuffer(bytes)], filename, { type: mime });
+  const canShare = typeof navigator.share === "function" && navigator.canShare?.({ files: [file] });
+  if (canShare) {
+    return navigator
+      .share({ files: [file], title: filename })
+      .then(() => "shared" as const)
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return "cancelled";
+        downloadFile(file);
+        return "downloaded";
+      });
+  }
+  downloadFile(file);
+  return Promise.resolve("downloaded");
 }

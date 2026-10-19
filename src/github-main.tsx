@@ -8,7 +8,7 @@ import { ReagentsView, type SavePayload } from "@/components/reagents-view";
 import { ScanView } from "@/components/scan-view";
 import { AppShell, type TabId } from "@/components/shell";
 import { computeAlerts } from "@/lib/alerts";
-import { exportStockRecordsExcel } from "@/lib/export-excel";
+
 import {
   checkPlatformAdmin,
   createGitHubRestockOrder,
@@ -236,20 +236,9 @@ export function GitHubPagesApp() {
   }
 
   async function handleExportRecords(filter: "all" | StockType) {
-    if (!tenantId) return;
-    try {
-      const all = await listAllGitHubStockRecords(tenantId);
-      const filtered = filter === "all" ? all : all.filter((record) => record.type === filter);
-      const exported = await exportStockRecordsExcel(filtered, filter);
-      if (filtered.length === 0 || !exported) {
-        toast.error(filtered.length === 0 ? "当前筛选没有可导出的记录" : "导出失败，请稍后重试");
-        return;
-      }
-      const scope = filter === "in" ? "入库" : filter === "out" ? "出库" : "全部";
-      toast.success(`已导出 ${filtered.length} 条${scope}记录`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "导出失败，请稍后重试");
-    }
+    if (!tenantId) return [];
+    const all = await listAllGitHubStockRecords(tenantId);
+    return filter === "all" ? all : all.filter((record) => record.type === filter);
   }
 
   async function handleReceive(id: number) {
