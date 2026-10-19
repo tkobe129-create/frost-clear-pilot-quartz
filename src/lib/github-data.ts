@@ -261,7 +261,7 @@ export async function listGitHubRecords(tenantId: string): Promise<StockRecord[]
   return ((data ?? []) as StockRow[]).map(fromStock);
 }
 
-async function listAllGitHubStockRecords(tenantId: string): Promise<StockRecord[]> {
+export async function listAllGitHubStockRecords(tenantId: string): Promise<StockRecord[]> {
   const pageSize = 500;
   const records: StockRecord[] = [];
   for (let offset = 0; ; offset += pageSize) {

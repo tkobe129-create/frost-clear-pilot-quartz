@@ -1,4 +1,4 @@
-import type { PurchaseOrder } from "@/lib/types";
+import type { PurchaseOrder, StockRecord, StockType } from "@/lib/types";
 
 function escapeCell(value: string | number): string {
   return String(value)
@@ -64,11 +64,95 @@ export function exportPurchaseOrderExcel(order: PurchaseOrder): void {
 </body>
 </html>`;
 
+  downloadExcel(`权盾智检-采购单-${order.id}.xls`, html);
+}
+
+function downloadExcel(filename: string, html: string) {
   const blob = new Blob(["\ufeff", html], { type: "application/vnd.ms-excel;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `权盾智检-采购单-${order.id}.xls`;
+  link.download = filename;
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatExportWhen(iso: string): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function fileStamp(): string {
+  const date = new Date();
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`;
+}
+
+function recordScope(filter: "all" | StockType): string {
+  if (filter === "in") return "入库";
+  if (filter === "out") return "出库";
+  return "全部";
+}
+
+/**
+ * Downloads the stock ledger as an Excel-compatible file.
+ * Caller should pass the full filtered set, not only the 200 rows shown on screen.
+ */
+export function exportStockRecordsExcel(records: StockRecord[], filter: "all" | StockType = "all"): boolean {
+  if (typeof document === "undefined" || records.length === 0) return false;
+
+  const scope = recordScope(filter);
+  const sorted = [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id);
+  const inbound = sorted.filter((record) => record.type === "in").reduce((sum, record) => sum + record.quantity, 0);
+  const outbound = sorted.filter((record) => record.type === "out").reduce((sum, record) => sum + record.quantity, 0);
+  const rows = sorted
+    .map(
+      (record) => `
+        <tr>
+          <td>${escapeCell(formatExportWhen(record.createdAt))}</td>
+          <td>${escapeCell(record.type === "in" ? "入库" : "出库")}</td>
+          <td>${escapeCell(record.reagentName || "未知试剂")}</td>
+          <td class="number">${escapeCell(record.type === "in" ? record.quantity : -record.quantity)}</td>
+          <td>${escapeCell(record.lotNumber)}</td>
+          <td>${escapeCell(record.expiryDate)}</td>
+          <td>${escapeCell(record.productionDate)}</td>
+          <td>${escapeCell(record.operator || "检验员")}</td>
+          <td>${escapeCell(record.department || "检验科")}</td>
+          <td>${escapeCell(record.note)}</td>
+          <td>${escapeCell(record.reason)}</td>
+        </tr>`,
+    )
+    .join("");
+
+  const html = `<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    table { border-collapse: collapse; }
+    th, td { border: 1px solid #b7b7b7; padding: 6px 10px; white-space: nowrap; }
+    th { background: #0e5c56; color: #ffffff; font-weight: bold; }
+    .number { mso-number-format: "0"; text-align: right; }
+  </style>
+</head>
+<body>
+  <h2>权盾智检出入库记录 · ${escapeCell(scope)}</h2>
+  <p>导出时间：${escapeCell(formatExportWhen(new Date().toISOString()))} | ${sorted.length} 条 | 入库合计 ${inbound} | 出库合计 ${outbound} | 出库数量以负数表示</p>
+  <table>
+    <thead><tr>
+      <th>时间</th><th>类型</th><th>试剂名称</th><th>数量</th><th>批号</th><th>有效期</th>
+      <th>生产日期</th><th>操作人</th><th>科室</th><th>备注</th><th>原因</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+</body>
+</html>`;
+
+  downloadExcel(`权盾智检-出入库记录-${scope}-${fileStamp()}.xls`, html);
+  return true;
 }

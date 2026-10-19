@@ -1,19 +1,39 @@
 import { useMemo, useState } from "react";
+import { Download } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { formatWhen } from "@/lib/alerts";
 import type { StockRecord, StockType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-export function RecordsView({ records }: { records: StockRecord[] }) {
+export function RecordsView({
+  records,
+  onExport,
+}: {
+  records: StockRecord[];
+  onExport: (filter: "all" | StockType) => Promise<void>;
+}) {
   const [filter, setFilter] = useState<"all" | StockType>("all");
+  const [exporting, setExporting] = useState(false);
   const list = useMemo(
     () => (filter === "all" ? records : records.filter((r) => r.type === filter)),
     [filter, records],
   );
 
+  async function exportRecords() {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      await onExport(filter);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-3 rounded-lg bg-bg-elevated p-1">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="grid min-w-0 flex-1 grid-cols-3 rounded-lg bg-bg-elevated p-1">
         {(
           [
             ["all", "全部"],
@@ -33,7 +53,21 @@ export function RecordsView({ records }: { records: StockRecord[] }) {
             {label}
           </button>
         ))}
+        </div>
+        <Button
+          variant="outline"
+          className="h-11 shrink-0 sm:h-10"
+          disabled={exporting}
+          onClick={() => void exportRecords()}
+        >
+          <Download className="size-4" />
+          {exporting ? "导出中…" : "导出 Excel"}
+        </Button>
       </div>
+      <p className="text-xs leading-5 text-muted">
+        {records.length >= 200 ? "列表只显示最近 200 条。" : "列表为最近记录。"}
+        导出按当前筛选下载本科室全部流水，含操作人、批号和原因。
+      </p>
       {list.length === 0 ? (
         <p className="py-12 text-center text-sm text-muted">暂无出入库记录</p>
       ) : (
