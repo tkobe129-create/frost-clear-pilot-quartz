@@ -98,24 +98,32 @@ export function ScannerOverlay({ open, onClose, onDetect }: Props) {
 
         const tick = async () => {
           if (stopped) return;
+          // Native BarcodeDetector polls the live video at 40ms. Without it,
+          // ZXing is the only decoder, so slow the loop to 70ms.
+          const interval = detector ? 40 : 70;
           if (!busy && video.readyState >= 2 && video.videoWidth > 0) {
             busy = true;
             try {
-              const mode = frame % 2 === 0 ? "band" : "full";
-              const invert = frame % 6 === 5;
-              drawVideoFrame(video, canvas, ctx, mode, invert);
-
-              const zxingText = decodeCanvas(reader, canvas);
-              if (zxingText) {
-                emit(zxingText);
-              } else if (detector) {
+              let recognized = false;
+              if (detector) {
                 try {
-                  const codes = await detector.detect(canvas);
+                  const codes = await detector.detect(video);
                   const nativeText = codes[0]?.rawValue?.trim();
-                  if (nativeText) emit(nativeText);
+                  if (nativeText) {
+                    emit(nativeText);
+                    recognized = true;
+                  }
                 } catch {
-                  /* Safari may reject some canvas frames */
+                  /* video source rejected; fall through to software decode */
                 }
+              }
+              // Hardware miss or no BarcodeDetector: draw a frame and use ZXing.
+              if (!recognized) {
+                const mode = frame % 2 === 0 ? "band" : "full";
+                const invert = frame % 6 === 5;
+                drawVideoFrame(video, canvas, ctx, mode, invert);
+                const zxingText = decodeCanvas(reader, canvas);
+                if (zxingText) emit(zxingText);
               }
               // Keep scheduling frames after a successful decode. Returning from
               // here used to stop the loop after the first barcode, which made
@@ -125,7 +133,7 @@ export function ScannerOverlay({ open, onClose, onDetect }: Props) {
               busy = false;
             }
           }
-          timer = window.setTimeout(() => void tick(), 70);
+          timer = window.setTimeout(() => void tick(), interval);
         };
         void tick();
       } catch (err) {

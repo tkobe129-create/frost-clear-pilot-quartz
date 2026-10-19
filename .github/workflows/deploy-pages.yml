@@ -3,6 +3,7 @@ name: Deploy GitHub Pages
 on:
   push:
     branches:
+      - arena/bc21fcc8-frost-clear-pilot-quartz
       - arena/01a0dd27-frost-clear-pilot-quartz
       - main
   workflow_dispatch:
