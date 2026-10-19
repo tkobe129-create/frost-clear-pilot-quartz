@@ -66,7 +66,7 @@ export function RecordsView({
       </div>
       <p className="text-xs leading-5 text-muted">
         {records.length >= 200 ? "列表只显示最近 200 条。" : "列表为最近记录。"}
-        导出按当前筛选下载本科室全部流水，含操作人、批号和原因。
+        导出按当前筛选下载全部流水，Excel 中按列排好，入库为绿色、出库为红色。
       </p>
       {list.length === 0 ? (
         <p className="py-12 text-center text-sm text-muted">暂无出入库记录</p>
