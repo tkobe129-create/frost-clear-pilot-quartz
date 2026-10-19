@@ -101,141 +101,317 @@ function recordScope(filter: "all" | StockType): string {
 
 function xmlText(value: string | number): string {
   return String(value)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 }
 
-function sheetCell(style: string, type: "String" | "Number", value: string | number): string {
-  return `<Cell ss:StyleID="${style}"><Data ss:Type="${type}">${xmlText(value)}</Data></Cell>`;
+function crc32(data: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (let i = 0; i < data.length; i++) {
+    crc ^= data[i];
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
-function sheetRow(cells: string, height?: number): string {
-  const heightAttr = height ? ` ss:Height="${height}"` : ` ss:AutoFitHeight="1"`;
-  return `<Row${heightAttr}>${cells}</Row>`;
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+async function deflateRaw(data: Uint8Array): Promise<Uint8Array | null> {
+  if (typeof CompressionStream === "undefined") return null;
+  const stream = new CompressionStream("deflate-raw");
+  const writer = stream.writable.getWriter();
+  await writer.write(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer);
+  await writer.close();
+  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+}
+
+/** Minimal OOXML zip. Uses deflate when the browser supports it, otherwise store. */
+async function zipXlsx(files: Array<{ name: string; data: Uint8Array }>): Promise<Uint8Array> {
+  const now = new Date();
+  const time = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
+  const date = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  const locals: Uint8Array[] = [];
+  const centrals: Uint8Array[] = [];
+  let offset = 0;
+  for (const file of files) {
+    const name = new TextEncoder().encode(file.name);
+    const compressed = (await deflateRaw(file.data)) ?? file.data;
+    const method = compressed === file.data ? 0 : 8;
+    const crc = crc32(file.data);
+    const local = new Uint8Array(30 + name.length + compressed.length);
+    const view = new DataView(local.buffer);
+    view.setUint32(0, 0x04034b50, true);
+    view.setUint16(4, 20, true);
+    view.setUint16(6, 0x0800, true);
+    view.setUint16(8, method, true);
+    view.setUint16(10, time, true);
+    view.setUint16(12, date, true);
+    view.setUint32(14, crc, true);
+    view.setUint32(18, compressed.length, true);
+    view.setUint32(22, file.data.length, true);
+    view.setUint16(26, name.length, true);
+    local.set(name, 30);
+    local.set(compressed, 30 + name.length);
+    locals.push(local);
+
+    const central = new Uint8Array(46 + name.length);
+    const centralView = new DataView(central.buffer);
+    centralView.setUint32(0, 0x02014b50, true);
+    centralView.setUint16(4, 20, true);
+    centralView.setUint16(6, 20, true);
+    centralView.setUint16(8, 0x0800, true);
+    centralView.setUint16(10, method, true);
+    centralView.setUint16(12, time, true);
+    centralView.setUint16(14, date, true);
+    centralView.setUint32(16, crc, true);
+    centralView.setUint32(20, compressed.length, true);
+    centralView.setUint32(24, file.data.length, true);
+    centralView.setUint16(28, name.length, true);
+    centralView.setUint32(42, offset, true);
+    central.set(name, 46);
+    centrals.push(central);
+    offset += local.length;
+  }
+  const centralBytes = concatBytes(centrals);
+  const eocd = new Uint8Array(22);
+  const end = new DataView(eocd.buffer);
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, files.length, true);
+  end.setUint16(10, files.length, true);
+  end.setUint32(12, centralBytes.length, true);
+  end.setUint32(16, offset, true);
+  return concatBytes([...locals, centralBytes, eocd]);
+}
+
+function columnName(index: number): string {
+  let n = index + 1;
+  let name = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    name = String.fromCharCode(65 + rem) + name;
+    n = Math.floor((n - 1) / 26);
+  }
+  return name;
+}
+
+function stylesXml(): string {
+  const solid = (color: string) =>
+    `<fill><patternFill patternType="solid"><fgColor rgb="${color}"/><bgColor rgb="${color}"/></patternFill></fill>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="7">
+    <font><sz val="11"/><name val="微软雅黑"/></font>
+    <font><b/><sz val="16"/><color rgb="FF0E5C56"/><name val="微软雅黑"/></font>
+    <font><sz val="10"/><color rgb="FF5E645C"/><name val="微软雅黑"/></font>
+    <font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="微软雅黑"/></font>
+    <font><sz val="11"/><color rgb="FF1C1D1A"/><name val="微软雅黑"/></font>
+    <font><b/><sz val="11"/><color rgb="FF0B7A45"/><name val="微软雅黑"/></font>
+    <font><b/><sz val="11"/><color rgb="FFC2412D"/><name val="微软雅黑"/></font>
+  </fonts>
+  <fills count="6">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+    ${solid("FF0E5C56")}
+    ${solid("FFF7F6F2")}
+    ${solid("FFE7F6EE")}
+    ${solid("FFFDECEC")}
+  </fills>
+  <borders count="2">
+    <border><left/><right/><top/><bottom/><diagonal/></border>
+    <border>
+      <left style="thin"><color rgb="FFE4E2DC"/></left>
+      <right style="thin"><color rgb="FFE4E2DC"/></right>
+      <top style="thin"><color rgb="FFE4E2DC"/></top>
+      <bottom style="thin"><color rgb="FFE4E2DC"/></bottom>
+      <diagonal/>
+    </border>
+  </borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="12">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="3" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+    <xf numFmtId="0" fontId="4" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+    <xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="4" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="1" fontId="4" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+    <xf numFmtId="1" fontId="4" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="5" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="6" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+  </cellXfs>
+</styleSheet>`;
+}
+
+function buildLedgerSheet(records: StockRecord[], filter: "all" | StockType): { sheet: string; strings: string } {
+  const scope = recordScope(filter);
+  const sorted = [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id);
+  const inbound = sorted.filter((record) => record.type === "in");
+  const outbound = sorted.filter((record) => record.type === "out");
+  const inboundQty = inbound.reduce((sum, record) => sum + record.quantity, 0);
+  const outboundQty = outbound.reduce((sum, record) => sum + record.quantity, 0);
+  const strings: string[] = [];
+  const textId = (value: string) => {
+    const id = strings.length;
+    strings.push(value);
+    return id;
+  };
+  const textCell = (ref: string, style: number, value: string) =>
+    `<c r="${ref}" t="s" s="${style}"><v>${textId(value)}</v></c>`;
+  const numberCell = (ref: string, style: number, value: number) =>
+    `<c r="${ref}" s="${style}"><v>${value}</v></c>`;
+  const headers = ["时间", "类型", "试剂名称", "数量", "批号", "有效期", "生产日期", "操作人", "科室", "备注", "原因"];
+  const lastRow = 4 + sorted.length;
+  const headerCells = headers.map((label, index) => textCell(`${columnName(index)}4`, 3, label)).join("");
+  const dataRows = sorted
+    .map((record, index) => {
+      const row = index + 5;
+      const band = index % 2 === 1;
+      const inboundRow = record.type === "in";
+      const text = band ? 5 : 4;
+      const wrap = band ? 7 : 6;
+      const qty = band ? 9 : 8;
+      const longest = Math.max(record.reagentName.length, record.lotNumber.length, record.note.length, record.reason.length);
+      const height = 16 + Math.min(4, Math.max(1, Math.ceil(longest / 14))) * 16;
+      const cells = [
+        textCell(`A${row}`, text, formatExportWhen(record.createdAt)),
+        textCell(`B${row}`, inboundRow ? 10 : 11, inboundRow ? "入库" : "出库"),
+        textCell(`C${row}`, wrap, record.reagentName || "未知试剂"),
+        numberCell(`D${row}`, qty, record.quantity),
+        textCell(`E${row}`, wrap, record.lotNumber),
+        textCell(`F${row}`, text, record.expiryDate),
+        textCell(`G${row}`, text, record.productionDate),
+        textCell(`H${row}`, text, record.operator || "检验员"),
+        textCell(`I${row}`, text, record.department || "检验科"),
+        textCell(`J${row}`, wrap, record.note),
+        textCell(`K${row}`, wrap, record.reason),
+      ].join("");
+      return `<row r="${row}" ht="${height}" customHeight="1">${cells}</row>`;
+    })
+    .join("");
+  const title = `权盾智检 · 出入库记录（${scope}）`;
+  const summary = `导出时间 ${formatExportWhen(new Date().toISOString())}    共 ${sorted.length} 条    入库 ${inbound.length} 笔 / ${inboundQty}    出库 ${outbound.length} 笔 / ${outboundQty}`;
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:K${lastRow}"/>
+  <sheetViews>
+    <sheetView tabSelected="1" workbookViewId="0">
+      <pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/>
+    </sheetView>
+  </sheetViews>
+  <sheetFormatPr defaultRowHeight="20"/>
+  <cols>
+    <col min="1" max="1" width="20" customWidth="1"/>
+    <col min="2" max="2" width="10" customWidth="1"/>
+    <col min="3" max="3" width="24" customWidth="1"/>
+    <col min="4" max="4" width="10" customWidth="1"/>
+    <col min="5" max="5" width="18" customWidth="1"/>
+    <col min="6" max="6" width="14" customWidth="1"/>
+    <col min="7" max="7" width="14" customWidth="1"/>
+    <col min="8" max="8" width="12" customWidth="1"/>
+    <col min="9" max="9" width="12" customWidth="1"/>
+    <col min="10" max="10" width="28" customWidth="1"/>
+    <col min="11" max="11" width="24" customWidth="1"/>
+  </cols>
+  <sheetData>
+    <row r="1" ht="28" customHeight="1">${textCell("A1", 1, title)}</row>
+    <row r="2" ht="22" customHeight="1">${textCell("A2", 2, summary)}</row>
+    <row r="3" ht="8" customHeight="1"/>
+    <row r="4" ht="22" customHeight="1">${headerCells}</row>
+    ${dataRows}
+  </sheetData>
+  <autoFilter ref="A4:K${lastRow}"/>
+  <mergeCells count="2">
+    <mergeCell ref="A1:K1"/>
+    <mergeCell ref="A2:K2"/>
+  </mergeCells>
+</worksheet>`;
+  const sst = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${strings.length}" uniqueCount="${strings.length}">
+  ${strings.map((value) => `<si><t xml:space="preserve">${xmlText(value)}</t></si>`).join("")}
+</sst>`;
+  return { sheet, strings: sst };
+}
+
+export async function buildStockRecordsXlsx(records: StockRecord[], filter: "all" | StockType = "all"): Promise<Uint8Array> {
+  const { sheet, strings } = buildLedgerSheet(records, filter);
+  const encode = (xml: string) => new TextEncoder().encode(xml);
+  return zipXlsx([
+    {
+      name: "[Content_Types].xml",
+      data: encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>`),
+    },
+    {
+      name: "_rels/.rels",
+      data: encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`),
+    },
+    {
+      name: "xl/workbook.xml",
+      data: encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="出入库记录" sheetId="1" r:id="rId1"/></sheets>
+</workbook>`),
+    },
+    {
+      name: "xl/_rels/workbook.xml.rels",
+      data: encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+</Relationships>`),
+    },
+    { name: "xl/styles.xml", data: encode(stylesXml()) },
+    { name: "xl/sharedStrings.xml", data: encode(strings) },
+    { name: "xl/worksheets/sheet1.xml", data: encode(sheet) },
+  ]);
+}
+
+function downloadBinary(filename: string, bytes: Uint8Array, mime: string) {
+  const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /**
- * Downloads the stock ledger as a real Excel worksheet.
- * SpreadsheetML keeps column widths, colors and wrapped notes, which the old
- * HTML-table .xls file collapsed into one unreadable block.
+ * Downloads a real .xlsx workbook. The previous .xls file was XML text, which
+ * iPhone Safari displayed as source code instead of a table.
  */
-export function exportStockRecordsExcel(records: StockRecord[], filter: "all" | StockType = "all"): boolean {
+export async function exportStockRecordsExcel(records: StockRecord[], filter: "all" | StockType = "all"): Promise<boolean> {
   if (typeof document === "undefined" || records.length === 0) return false;
-
-  const scope = recordScope(filter);
-  const sorted = [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id);
-  const inboundRows = sorted.filter((record) => record.type === "in");
-  const outboundRows = sorted.filter((record) => record.type === "out");
-  const inboundQty = inboundRows.reduce((sum, record) => sum + record.quantity, 0);
-  const outboundQty = outboundRows.reduce((sum, record) => sum + record.quantity, 0);
-  const headers = ["时间", "类型", "试剂名称", "数量", "批号", "有效期", "生产日期", "操作人", "科室", "备注", "原因"];
-  const headerRow = sheetRow(headers.map((label) => sheetCell("header", "String", label)).join(""), 24);
-  const dataRows = sorted
-    .map((record, index) => {
-      const band = index % 2 === 1;
-      const inbound = record.type === "in";
-      const text = band ? "textBand" : "text";
-      const wrap = band ? "wrapBand" : "wrap";
-      const qty = band ? "qtyBand" : "qty";
-      const longest = Math.max(
-        record.reagentName.length,
-        record.lotNumber.length,
-        record.note.length,
-        record.reason.length,
-      );
-      const lines = Math.min(4, Math.max(1, Math.ceil(longest / 14)));
-      return sheetRow(
-        [
-          sheetCell(text, "String", formatExportWhen(record.createdAt)),
-          sheetCell(inbound ? "inType" : "outType", "String", inbound ? "入库" : "出库"),
-          sheetCell(wrap, "String", record.reagentName || "未知试剂"),
-          sheetCell(qty, "Number", record.quantity),
-          sheetCell(wrap, "String", record.lotNumber),
-          sheetCell(text, "String", record.expiryDate),
-          sheetCell(text, "String", record.productionDate),
-          sheetCell(text, "String", record.operator || "检验员"),
-          sheetCell(text, "String", record.department || "检验科"),
-          sheetCell(wrap, "String", record.note),
-          sheetCell(wrap, "String", record.reason),
-        ].join(""),
-        16 + lines * 16,
-      );
-    })
-    .join("");
-
-  const rowCount = 4 + sorted.length;
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
- xmlns:o="urn:schemas-microsoft-com:office:office"
- xmlns:x="urn:schemas-microsoft-com:office:excel"
- xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
- <Styles>
-  <Style ss:ID="title">
-    <Alignment ss:Vertical="Center"/>
-    <Font ss:FontName="微软雅黑" ss:Size="16" ss:Bold="1" ss:Color="#0E5C56"/>
-  </Style>
-  <Style ss:ID="meta">
-    <Alignment ss:Vertical="Center" ss:WrapText="1"/>
-    <Font ss:FontName="微软雅黑" ss:Size="10" ss:Color="#5E645C"/>
-  </Style>
-  <Style ss:ID="header">
-    <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>
-    <Borders>
-      <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#0E5C56"/>
-      <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#0E5C56"/>
-      <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#0E5C56"/>
-      <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#0E5C56"/>
-    </Borders>
-    <Font ss:FontName="微软雅黑" ss:Size="11" ss:Bold="1" ss:Color="#FFFFFF"/>
-    <Interior ss:Color="#0E5C56" ss:Pattern="Solid"/>
-  </Style>
-  <Style ss:ID="text"><Alignment ss:Vertical="Center"/><Font ss:FontName="微软雅黑" ss:Size="11" ss:Color="#1C1D1A"/>${sheetBorder("#E4E2DC")}</Style>
-  <Style ss:ID="textBand"><Alignment ss:Vertical="Center"/><Font ss:FontName="微软雅黑" ss:Size="11" ss:Color="#1C1D1A"/><Interior ss:Color="#F7F6F2" ss:Pattern="Solid"/>${sheetBorder("#E4E2DC")}</Style>
-  <Style ss:ID="wrap"><Alignment ss:Vertical="Center" ss:WrapText="1"/><Font ss:FontName="微软雅黑" ss:Size="11" ss:Color="#1C1D1A"/>${sheetBorder("#E4E2DC")}</Style>
-  <Style ss:ID="wrapBand"><Alignment ss:Vertical="Center" ss:WrapText="1"/><Font ss:FontName="微软雅黑" ss:Size="11" ss:Color="#1C1D1A"/><Interior ss:Color="#F7F6F2" ss:Pattern="Solid"/>${sheetBorder("#E4E2DC")}</Style>
-  <Style ss:ID="qty"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Font ss:FontName="微软雅黑" ss:Size="11" ss:Color="#1C1D1A"/><NumberFormat ss:Format="0"/>${sheetBorder("#E4E2DC")}</Style>
-  <Style ss:ID="qtyBand"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Font ss:FontName="微软雅黑" ss:Size="11" ss:Color="#1C1D1A"/><Interior ss:Color="#F7F6F2" ss:Pattern="Solid"/><NumberFormat ss:Format="0"/>${sheetBorder("#E4E2DC")}</Style>
-  <Style ss:ID="inType"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:FontName="微软雅黑" ss:Size="11" ss:Bold="1" ss:Color="#0B7A45"/><Interior ss:Color="#E7F6EE" ss:Pattern="Solid"/>${sheetBorder("#E4E2DC")}</Style>
-  <Style ss:ID="outType"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:FontName="微软雅黑" ss:Size="11" ss:Bold="1" ss:Color="#C2412D"/><Interior ss:Color="#FDECEC" ss:Pattern="Solid"/>${sheetBorder("#E4E2DC")}</Style>
- </Styles>
- <Worksheet ss:Name="出入库记录">
-  <Table ss:ExpandedColumnCount="11" ss:ExpandedRowCount="${rowCount}" ss:DefaultRowHeight="20">
-   <Column ss:AutoFitWidth="0" ss:Width="118"/>
-   <Column ss:AutoFitWidth="0" ss:Width="52"/>
-   <Column ss:AutoFitWidth="0" ss:Width="168"/>
-   <Column ss:AutoFitWidth="0" ss:Width="52"/>
-   <Column ss:AutoFitWidth="0" ss:Width="110"/>
-   <Column ss:AutoFitWidth="0" ss:Width="88"/>
-   <Column ss:AutoFitWidth="0" ss:Width="88"/>
-   <Column ss:AutoFitWidth="0" ss:Width="72"/>
-   <Column ss:AutoFitWidth="0" ss:Width="72"/>
-   <Column ss:AutoFitWidth="0" ss:Width="180"/>
-   <Column ss:AutoFitWidth="0" ss:Width="150"/>
-   ${sheetRow(`<Cell ss:MergeAcross="10" ss:StyleID="title"><Data ss:Type="String">${xmlText(`权盾智检 · 出入库记录（${scope}）`)}</Data></Cell>`, 30)}
-   ${sheetRow(`<Cell ss:MergeAcross="10" ss:StyleID="meta"><Data ss:Type="String">${xmlText(`导出时间 ${formatExportWhen(new Date().toISOString())}    共 ${sorted.length} 条    入库 ${inboundRows.length} 笔 / ${inboundQty}    出库 ${outboundRows.length} 笔 / ${outboundQty}    数量均为正数`)}</Data></Cell>`, 22)}
-   <Row ss:Height="10"/>
-   ${headerRow}
-   ${dataRows}
-  </Table>
-  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
-   <FreezePanes/>
-   <FrozenNoSplit/>
-   <SplitHorizontal>4</SplitHorizontal>
-   <TopRowBottomPane>5</TopRowBottomPane>
-   <ActivePane>2</ActivePane>
-   <Panes><Pane><Number>2</Number><ActiveRow>4</ActiveRow></Pane></Panes>
-  </WorksheetOptions>
-  <AutoFilter x:Range="R4C1:R${rowCount}C11" xmlns="urn:schemas-microsoft-com:office:excel"/>
- </Worksheet>
-</Workbook>`;
-
-  downloadExcel(`权盾智检-出入库记录-${scope}-${fileStamp()}.xls`, xml);
+  const bytes = await buildStockRecordsXlsx(records, filter);
+  downloadBinary(
+    `权盾智检-出入库记录-${recordScope(filter)}-${fileStamp()}.xlsx`,
+    bytes,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  );
   return true;
-}
-
-function sheetBorder(color: string): string {
-  return `<Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="${color}"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="${color}"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="${color}"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="${color}"/></Borders>`;
 }

@@ -240,7 +240,8 @@ export function GitHubPagesApp() {
     try {
       const all = await listAllGitHubStockRecords(tenantId);
       const filtered = filter === "all" ? all : all.filter((record) => record.type === filter);
-      if (filtered.length === 0 || !exportStockRecordsExcel(filtered, filter)) {
+      const exported = await exportStockRecordsExcel(filtered, filter);
+      if (filtered.length === 0 || !exported) {
         toast.error(filtered.length === 0 ? "当前筛选没有可导出的记录" : "导出失败，请稍后重试");
         return;
       }
