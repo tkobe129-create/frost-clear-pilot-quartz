@@ -33,7 +33,7 @@ begin
       and p.proname in (
         'is_tenant_member', 'is_tenant_admin', 'is_platform_admin', 'claim_default_tenant',
         'create_tenant', 'create_platform_tenant', 'create_tenant_invite', 'accept_tenant_invite',
-        'submit_stock_batch', 'create_restock_order', 'create_restock_order_once', 'close_purchase_order', 'receive_purchase_order', 'save_reagent',
+        'submit_stock_batch', 'create_restock_order', 'create_restock_order_once', 'create_restock_order_auto', 'restock_line_still_blocks', 'close_purchase_order', 'receive_purchase_order', 'save_reagent',
         'list_platform_tenants', 'set_platform_tenant_status'
       )
   loop
@@ -562,6 +562,43 @@ $$;
 end;
 $$;
 
+create or replace function public.restock_line_still_blocks(
+  p_tenant_id uuid,
+  p_reagent_id bigint,
+  p_min_stock integer,
+  p_ordered_at timestamptz
+)
+returns boolean
+language plpgsql stable security definer set search_path = public
+as $$
+declare
+  rec record;
+  qty integer := 0;
+  seen_inbound boolean := false;
+begin
+  if p_min_stock is null or p_min_stock <= 0 then
+    return false;
+  end if;
+  for rec in
+    select type, quantity, created_at
+    from public.stock_records
+    where tenant_id = p_tenant_id and reagent_id = p_reagent_id
+    order by created_at, id
+  loop
+    if rec.created_at <= p_ordered_at then
+      qty := qty + case when rec.type = 'in' then rec.quantity else -rec.quantity end;
+      continue;
+    end if;
+    if rec.type = 'in' then seen_inbound := true; end if;
+    qty := qty + case when rec.type = 'in' then rec.quantity else -rec.quantity end;
+    if seen_inbound and qty > p_min_stock then
+      return false;
+    end if;
+  end loop;
+  return true;
+end;
+$$;
+
 create or replace function public.create_restock_order(p_tenant_id uuid, p_note text)
 returns jsonb
 language plpgsql security definer set search_path = public
@@ -584,10 +621,13 @@ begin
         select 1
         from public.purchase_order_items i
         join public.purchase_orders o on o.id = i.order_id and o.tenant_id = i.tenant_id
-        where i.tenant_id = p_tenant_id and i.reagent_id = r.id and o.status = 'submitted'
+        where i.tenant_id = p_tenant_id
+          and i.reagent_id = r.id
+          and o.status = 'submitted'
+          and public.restock_line_still_blocks(p_tenant_id, r.id, r.min_stock, o.created_at)
       )
   ) then
-    raise exception '缺货试剂都已在未关闭的采购单中，无需重复下单';
+    raise exception '缺货试剂都已在采购单中，且入库后库存还没高于安全库存，无需重复下单';
   end if;
   insert into public.purchase_orders (tenant_id, status, note, item_count)
   values (p_tenant_id, 'submitted', coalesce(p_note, ''), 0) returning * into new_order;
@@ -601,7 +641,10 @@ begin
         select 1
         from public.purchase_order_items i
         join public.purchase_orders o on o.id = i.order_id and o.tenant_id = i.tenant_id
-        where i.tenant_id = p_tenant_id and i.reagent_id = r.id and o.status = 'submitted'
+        where i.tenant_id = p_tenant_id
+          and i.reagent_id = r.id
+          and o.status = 'submitted'
+          and public.restock_line_still_blocks(p_tenant_id, r.id, r.min_stock, o.created_at)
       )
     order by r.id
   loop
@@ -621,6 +664,13 @@ end;
 $$;
 
 create or replace function public.create_restock_order_once(p_tenant_id uuid, p_note text)
+returns jsonb
+language sql security definer set search_path = public
+as $$
+  select public.create_restock_order(p_tenant_id, p_note);
+$$;
+
+create or replace function public.create_restock_order_auto(p_tenant_id uuid, p_note text)
 returns jsonb
 language sql security definer set search_path = public
 as $$
@@ -686,6 +736,9 @@ grant execute on function public.submit_stock_batch(uuid, text, text, text, text
 grant execute on function public.create_restock_order(uuid, text) to authenticated;
 revoke all on function public.create_restock_order_once(uuid, text) from public, anon;
 grant execute on function public.create_restock_order_once(uuid, text) to authenticated;
+revoke all on function public.create_restock_order_auto(uuid, text) from public, anon;
+grant execute on function public.create_restock_order_auto(uuid, text) to authenticated;
+revoke all on function public.restock_line_still_blocks(uuid, bigint, integer, timestamptz) from public, anon, authenticated;
 revoke all on function public.close_purchase_order(uuid, bigint) from public, anon;
 grant execute on function public.close_purchase_order(uuid, bigint) to authenticated;
 grant execute on function public.receive_purchase_order(uuid, bigint, text) to authenticated;

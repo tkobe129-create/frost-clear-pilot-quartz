@@ -18,9 +18,7 @@ type Props = {
   onLoadMoreOrders?: () => void;
   openReagentIds?: number[];
   ordering: boolean;
-  closingId: number | null;
   onOrder: () => void;
-  onCloseOrder: (id: number) => void;
   canManagePurchases?: boolean;
   onGoScan: () => void;
   onGoReagents: () => void;
@@ -42,9 +40,7 @@ export function HomeView({
   onLoadMoreOrders,
   openReagentIds = [],
   ordering,
-  closingId,
   onOrder,
-  onCloseOrder,
   canManagePurchases = true,
   onGoScan,
   onGoReagents,
@@ -148,11 +144,8 @@ export function HomeView({
                 <OrderCard
                   key={displayedOrder.id}
                   order={displayedOrder}
-                  busy={closingId === displayedOrder.id}
-                  onCopy={() => copyOrder(displayedOrder)}
+                  onCopy={() => void copyOrder(displayedOrder)}
                   onExport={() => exportOrder(displayedOrder)}
-                  onClose={() => onCloseOrder(displayedOrder.id)}
-                  canManagePurchases={canManagePurchases}
                 />
               ) : null}
               {orders.length > 1 ? (
@@ -243,9 +236,9 @@ function Stat({ label, value, onClick }: { label: string; value: number; onClick
 
 function restockHint(low: number, orderable: number, alreadyOrdered: number): string {
   if (low === 0) return "暂无低于安全库存的试剂";
-  if (orderable === 0) return `这 ${alreadyOrdered} 项缺货试剂已在未关闭采购单中，不会重复下单`;
-  if (alreadyOrdered > 0) return `将为 ${orderable} 项新缺货试剂生成采购单，另外 ${alreadyOrdered} 项已下单，不会重复`;
-  return `将按安全库存为 ${orderable} 项缺货试剂生成采购单。生成后未关闭前不会重复下单`;
+  if (orderable === 0) return `这 ${alreadyOrdered} 项仍低于安全库存，且入库后还没高过安全库存，不会重复下单`;
+  if (alreadyOrdered > 0) return `将为 ${orderable} 项生成采购单。另外 ${alreadyOrdered} 项已下单，库存还没高过安全库存，不会重复`;
+  return `将按安全库存为 ${orderable} 项缺货试剂生成采购单`;
 }
 
 function StatusPill({ status }: { status: PurchaseOrder["status"] }) {
@@ -256,20 +249,13 @@ function StatusPill({ status }: { status: PurchaseOrder["status"] }) {
 
 function OrderCard({
   order,
-  busy,
   onCopy,
   onExport,
-  onClose,
-  canManagePurchases,
 }: {
   order: PurchaseOrder;
-  busy: boolean;
   onCopy: () => void;
   onExport: () => void;
-  onClose: () => void;
-  canManagePurchases: boolean;
 }) {
-  const [confirmClose, setConfirmClose] = useState(false);
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
@@ -288,7 +274,7 @@ function OrderCard({
         ))}
       </ul>
       {order.status === "submitted" ? (
-        <p className="mt-2 text-xs text-muted">未关闭前，这些试剂不会再次一键下单。关闭不改变库存，到货请扫码入库。</p>
+        <p className="mt-2 text-xs text-muted">这是采购清单，不改库存。到货请扫码入库。库存曾经高于安全库存后，再次缺货可以直接再下。</p>
       ) : null}
       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
         <Button variant="outline" size="sm" className="h-11 flex-1 sm:h-9" onClick={onCopy}>
@@ -299,32 +285,6 @@ function OrderCard({
           <Download className="size-3.5" />
           导出 Excel
         </Button>
-        {order.status === "submitted" && canManagePurchases ? (
-          <Button
-            size="sm"
-            variant={confirmClose ? "default" : "outline"}
-            className="h-11 flex-1 sm:h-9"
-            disabled={busy}
-            onClick={() => {
-              if (!confirmClose) {
-                setConfirmClose(true);
-                return;
-              }
-              onClose();
-            }}
-          >
-            {busy ? "关闭中…" : confirmClose ? "确认关闭，不改库存" : "关闭采购单"}
-          </Button>
-        ) : order.status === "submitted" ? (
-          <span className="flex h-11 flex-1 items-center justify-center text-xs text-muted sm:h-9">已下单，关闭前不会重复</span>
-        ) : order.status === "cancelled" ? (
-          <span className="flex h-11 flex-1 items-center justify-center text-xs text-muted sm:h-9">已关闭，可再次下单</span>
-        ) : (
-          <span className="flex h-11 flex-1 items-center justify-center gap-1 text-xs text-ok sm:h-9">
-            <Check className="size-3.5" />
-            已计入库存
-          </span>
-        )}
       </div>
     </div>
   );

@@ -11,10 +11,9 @@ import { computeAlerts } from "@/lib/alerts";
 
 import {
   checkPlatformAdmin,
-  closeGitHubPurchaseOrder,
   createGitHubRestockOrder,
   createTenantInvite,
-  listOpenOrderReagentIds,
+  listLockedRestockReagentIds,
   listAllGitHubStockRecords,
   listGitHubOrdersPage,
   listGitHubRecords,
@@ -51,7 +50,6 @@ export function GitHubPagesApp() {
   const [saving, setSaving] = useState(false);
   const [ordering, setOrdering] = useState(false);
   const [openReagentIds, setOpenReagentIds] = useState<number[]>([]);
-  const [closingId, setClosingId] = useState<number | null>(null);
 
   const loadMemberships = useCallback(async () => {
     setAccessLoading(true);
@@ -139,7 +137,7 @@ export function GitHubPagesApp() {
       listGitHubRecords(tenantId),
       listGitHubOrdersPage(tenantId),
       listGitHubStockBatches(tenantId, nextReagents),
-      listOpenOrderReagentIds(tenantId),
+      listLockedRestockReagentIds(tenantId, nextReagents),
     ]);
     setReagents(nextReagents);
     setRecords(nextRecords);
@@ -246,20 +244,6 @@ export function GitHubPagesApp() {
     return filter === "all" ? all : all.filter((record) => record.type === filter);
   }
 
-  async function handleCloseOrder(id: number) {
-    if (!tenantId || !isAdmin) return;
-    setClosingId(id);
-    try {
-      await closeGitHubPurchaseOrder(tenantId, id);
-      await refreshAll();
-      toast.success("采购单已关闭，库存未改变");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "关闭采购单失败");
-    } finally {
-      setClosingId(null);
-    }
-  }
-
   async function handleInvite() {
     if (!tenantId || !isAdmin) return;
     try {
@@ -352,9 +336,7 @@ export function GitHubPagesApp() {
           onLoadMoreOrders={() => void handleLoadMoreOrders()}
           openReagentIds={openReagentIds}
           ordering={ordering}
-          closingId={closingId}
           onOrder={() => void handleOrder()}
-          onCloseOrder={(id) => void handleCloseOrder(id)}
           canManagePurchases={isAdmin}
           onGoScan={() => setTab("scan")}
           onGoReagents={() => setTab("reagents")}

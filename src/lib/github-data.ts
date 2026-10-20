@@ -11,7 +11,7 @@ import type {
   TenantRole,
 } from "@/lib/types";
 import type { SavePayload } from "@/components/reagents-view";
-import { splitRestockCandidates } from "@/lib/restock";
+import { lockedRestockReagentIds, splitRestockCandidates, type RestockLedgerRow, type RestockOrderLine } from "@/lib/restock";
 import { reconstructAvailableBatches } from "@/lib/stock-batches";
 
 /**
@@ -429,39 +429,92 @@ export type ReagentStockItem = {
   note: string;
 };
 
-export async function listOpenOrderReagentIds(tenantId: string): Promise<number[]> {
-  const reagentIds = new Set<number>();
+async function listSubmittedRestockLines(tenantId: string): Promise<RestockOrderLine[]> {
+  const lines: RestockOrderLine[] = [];
   const headerPageSize = 200;
   for (let offset = 0; ; offset += headerPageSize) {
     const { data, error } = await supabase
       .from("purchase_orders")
-      .select("id")
+      .select("id, created_at")
       .eq("tenant_id", tenantId)
       .eq("status", "submitted")
       .order("id", { ascending: true })
       .range(offset, offset + headerPageSize - 1);
     if (error) throwError(error);
-    const headers = (data ?? []) as Array<{ id: unknown }>;
-    const orderIds = headers.map((row) => number(row.id)).filter((id) => id > 0);
+    const headers = (data ?? []) as Array<{ id: unknown; created_at: unknown }>;
+    const createdAtByOrder = new Map(headers.map((row) => [number(row.id), text(row.created_at)]));
+    const orderIds = [...createdAtByOrder.keys()].filter((id) => id > 0);
     if (orderIds.length > 0) {
       const itemPageSize = 500;
       for (let itemOffset = 0; ; itemOffset += itemPageSize) {
         const { data: items, error: itemError } = await supabase
           .from("purchase_order_items")
-          .select("reagent_id")
+          .select("order_id, reagent_id")
           .eq("tenant_id", tenantId)
           .in("order_id", orderIds)
           .order("id", { ascending: true })
           .range(itemOffset, itemOffset + itemPageSize - 1);
         if (itemError) throwError(itemError);
-        const page = (items ?? []) as Array<{ reagent_id: unknown }>;
-        for (const item of page) reagentIds.add(number(item.reagent_id));
+        const page = (items ?? []) as Array<{ order_id: unknown; reagent_id: unknown }>;
+        for (const item of page) {
+          const orderId = number(item.order_id);
+          lines.push({
+            reagentId: number(item.reagent_id),
+            orderedAt: createdAtByOrder.get(orderId) ?? "",
+            orderId,
+            status: "submitted",
+          });
+        }
         if (page.length < itemPageSize) break;
       }
     }
     if (headers.length < headerPageSize) break;
   }
-  return [...reagentIds];
+  return lines;
+}
+
+async function listRestockLedger(tenantId: string, reagentIds: number[]): Promise<RestockLedgerRow[]> {
+  const rows: RestockLedgerRow[] = [];
+  const chunkSize = 80;
+  for (let index = 0; index < reagentIds.length; index += chunkSize) {
+    const chunk = reagentIds.slice(index, index + chunkSize);
+    const pageSize = 500;
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase
+        .from("stock_records")
+        .select("id, reagent_id, type, quantity, created_at")
+        .eq("tenant_id", tenantId)
+        .in("reagent_id", chunk)
+        .order("id", { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (error) throwError(error);
+      const page = (data ?? []) as Array<Record<string, unknown>>;
+      for (const row of page) {
+        rows.push({
+          id: number(row.id),
+          reagentId: number(row.reagent_id),
+          type: row.type === "out" ? "out" : "in",
+          quantity: number(row.quantity),
+          createdAt: text(row.created_at),
+        });
+      }
+      if (page.length < pageSize) break;
+    }
+  }
+  return rows;
+}
+
+export async function listLockedRestockReagentIds(tenantId: string, reagents: Reagent[]): Promise<number[]> {
+  const lines = await listSubmittedRestockLines(tenantId);
+  if (lines.length === 0) return [];
+  const reagentIds = [...new Set(lines.map((line) => line.reagentId).filter((id) => id > 0))];
+  const ledger = await listRestockLedger(tenantId, reagentIds);
+  return lockedRestockReagentIds(reagents, lines, ledger);
+}
+
+export async function listOpenOrderReagentIds(tenantId: string): Promise<number[]> {
+  const lines = await listSubmittedRestockLines(tenantId);
+  return [...new Set(lines.map((line) => line.reagentId).filter((id) => id > 0))];
 }
 
 async function loadCreatedOrder(tenantId: string, data: unknown): Promise<PurchaseOrder> {
@@ -474,23 +527,37 @@ async function loadCreatedOrder(tenantId: string, data: unknown): Promise<Purcha
 }
 
 export async function createGitHubRestockOrder(tenantId: string): Promise<PurchaseOrder> {
-  const openIds = await listOpenOrderReagentIds(tenantId);
-  const guarded = await supabase.rpc("create_restock_order_once", {
+  const auto = await supabase.rpc("create_restock_order_auto", {
     p_tenant_id: tenantId,
     p_note: "一键补货",
   });
-  if (!guarded.error) return loadCreatedOrder(tenantId, guarded.data);
-  if (!isMissingRpc(guarded.error)) throwError(guarded.error);
+  if (!auto.error) return loadCreatedOrder(tenantId, auto.data);
+  if (!isMissingRpc(auto.error)) throwError(auto.error);
 
-  // The installed database function still repeats every low-stock reagent.
-  // Refuse rather than create a second copy of reagents already on an open order.
+  // Older database rules either repeat every low-stock reagent, or keep blocking
+  // a reagent forever after it appears on a purchase order. Only call them when
+  // this order cannot hit either mistake.
   const reagents = await listGitHubReagents(tenantId);
-  const { orderable, alreadyOrdered } = splitRestockCandidates(reagents, openIds);
+  const [lockedIds, openIds] = await Promise.all([
+    listLockedRestockReagentIds(tenantId, reagents),
+    listOpenOrderReagentIds(tenantId),
+  ]);
+  const open = new Set(openIds);
+  const { orderable, alreadyOrdered } = splitRestockCandidates(reagents, lockedIds);
   if (orderable.length === 0) {
-    throw new Error("缺货试剂都已在未关闭的采购单中，不会重复下单");
+    throw new Error("缺货试剂都已在采购单中，且入库后库存还没高于安全库存，不会重复下单");
+  }
+  if (orderable.some((reagent) => open.has(reagent.id))) {
+    throw new Error("这些试剂入库后库存曾经高于安全库存，可以再次下单。请先在数据库执行最新补丁");
   }
   if (alreadyOrdered.length > 0) {
-    throw new Error("已有未关闭采购单。当前不会把已下单的试剂再开一次");
+    const once = await supabase.rpc("create_restock_order_once", {
+      p_tenant_id: tenantId,
+      p_note: "一键补货",
+    });
+    if (!once.error) return loadCreatedOrder(tenantId, once.data);
+    if (!isMissingRpc(once.error)) throwError(once.error);
+    throw new Error("已下单且库存还没高于安全库存的试剂不会重复下单。请先在数据库执行最新补丁");
   }
 
   const { data, error } = await supabase.rpc("create_restock_order", {
@@ -499,17 +566,6 @@ export async function createGitHubRestockOrder(tenantId: string): Promise<Purcha
   });
   if (error) throwError(error);
   return loadCreatedOrder(tenantId, data);
-}
-
-export async function closeGitHubPurchaseOrder(tenantId: string, id: number): Promise<void> {
-  const { error } = await supabase.rpc("close_purchase_order", {
-    p_tenant_id: tenantId,
-    p_id: id,
-  });
-  if (error && isMissingRpc(error)) {
-    throw new Error("关闭采购单需要先更新数据库规则。库存不会因此改变");
-  }
-  if (error) throwError(error);
 }
 
 export async function receiveGitHubOrder(tenantId: string, id: number, operator: string): Promise<void> {
