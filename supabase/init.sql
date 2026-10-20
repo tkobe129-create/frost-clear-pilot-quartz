@@ -33,7 +33,7 @@ begin
       and p.proname in (
         'is_tenant_member', 'is_tenant_admin', 'is_platform_admin', 'claim_default_tenant',
         'create_tenant', 'create_platform_tenant', 'create_tenant_invite', 'accept_tenant_invite',
-        'submit_stock_batch', 'create_restock_order', 'receive_purchase_order', 'save_reagent',
+        'submit_stock_batch', 'create_restock_order', 'create_restock_order_once', 'close_purchase_order', 'receive_purchase_order', 'save_reagent',
         'list_platform_tenants', 'set_platform_tenant_status'
       )
   loop
@@ -570,13 +570,40 @@ declare
   new_order public.purchase_orders;
   reagent_row public.reagents;
   target_quantity integer;
+  inserted_count integer := 0;
 begin
   if not public.is_tenant_admin(p_tenant_id) then raise exception '只有检验科管理员可以创建采购单'; end if;
+  perform pg_advisory_xact_lock(hashtext('restock:' || p_tenant_id::text));
+  if not exists (
+    select 1
+    from public.reagents r
+    where r.tenant_id = p_tenant_id
+      and r.min_stock > 0
+      and r.stock_quantity <= r.min_stock
+      and not exists (
+        select 1
+        from public.purchase_order_items i
+        join public.purchase_orders o on o.id = i.order_id and o.tenant_id = i.tenant_id
+        where i.tenant_id = p_tenant_id and i.reagent_id = r.id and o.status = 'submitted'
+      )
+  ) then
+    raise exception '缺货试剂都已在未关闭的采购单中，无需重复下单';
+  end if;
   insert into public.purchase_orders (tenant_id, status, note, item_count)
   values (p_tenant_id, 'submitted', coalesce(p_note, ''), 0) returning * into new_order;
   for reagent_row in
-    select * from public.reagents
-    where tenant_id = p_tenant_id and min_stock > 0 and stock_quantity <= min_stock
+    select r.*
+    from public.reagents r
+    where r.tenant_id = p_tenant_id
+      and r.min_stock > 0
+      and r.stock_quantity <= r.min_stock
+      and not exists (
+        select 1
+        from public.purchase_order_items i
+        join public.purchase_orders o on o.id = i.order_id and o.tenant_id = i.tenant_id
+        where i.tenant_id = p_tenant_id and i.reagent_id = r.id and o.status = 'submitted'
+      )
+    order by r.id
   loop
     target_quantity := greatest(reagent_row.min_stock * 2 - reagent_row.stock_quantity, 1);
     insert into public.purchase_order_items
@@ -584,11 +611,35 @@ begin
     values
       (p_tenant_id, new_order.id, reagent_row.id, target_quantity,
        reagent_row.unit, reagent_row.name, reagent_row.manufacturer, reagent_row.specification, reagent_row.supplier);
+    inserted_count := inserted_count + 1;
   end loop;
   update public.purchase_orders
-    set item_count = (select count(*) from public.purchase_order_items where order_id = new_order.id and tenant_id = p_tenant_id)
+    set item_count = inserted_count
     where id = new_order.id and tenant_id = p_tenant_id;
-  return jsonb_build_object('id', new_order.id);
+  return jsonb_build_object('id', new_order.id, 'item_count', inserted_count);
+end;
+$$;
+
+create or replace function public.create_restock_order_once(p_tenant_id uuid, p_note text)
+returns jsonb
+language sql security definer set search_path = public
+as $$
+  select public.create_restock_order(p_tenant_id, p_note);
+$$;
+
+create or replace function public.close_purchase_order(p_tenant_id uuid, p_id bigint)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  updated_id bigint;
+begin
+  if not public.is_tenant_admin(p_tenant_id) then raise exception '只有检验科管理员可以关闭采购单'; end if;
+  update public.purchase_orders
+    set status = 'cancelled'
+    where id = p_id and tenant_id = p_tenant_id and status = 'submitted'
+    returning id into updated_id;
+  if updated_id is null then raise exception '采购单不存在或已关闭'; end if;
 end;
 $$;
 
@@ -633,6 +684,10 @@ grant execute on function public.save_reagent(uuid, bigint, jsonb, integer, text
 grant execute on function public.list_available_stock_batches(uuid) to authenticated;
 grant execute on function public.submit_stock_batch(uuid, text, text, text, text, jsonb) to authenticated;
 grant execute on function public.create_restock_order(uuid, text) to authenticated;
+revoke all on function public.create_restock_order_once(uuid, text) from public, anon;
+grant execute on function public.create_restock_order_once(uuid, text) to authenticated;
+revoke all on function public.close_purchase_order(uuid, bigint) from public, anon;
+grant execute on function public.close_purchase_order(uuid, bigint) to authenticated;
 grant execute on function public.receive_purchase_order(uuid, bigint, text) to authenticated;
 
 -- 管理员日常盘点与库存纠偏：自动计算盘盈/盘亏差异并写入审计流水

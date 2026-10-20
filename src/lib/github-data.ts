@@ -11,6 +11,7 @@ import type {
   TenantRole,
 } from "@/lib/types";
 import type { SavePayload } from "@/components/reagents-view";
+import { splitRestockCandidates } from "@/lib/restock";
 import { reconstructAvailableBatches } from "@/lib/stock-batches";
 
 /**
@@ -31,6 +32,12 @@ function throwError(error: unknown): never {
   const message =
     error && typeof error === "object" && "message" in error ? String((error as { message: unknown }).message) : "";
   throw new Error(message || "操作失败，请稍后再试");
+}
+
+function isMissingRpc(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("code" in error)) return false;
+  const code = String((error as { code: unknown }).code);
+  return code === "PGRST202" || code === "42883";
 }
 
 type ReagentRow = Record<string, unknown>;
@@ -422,18 +429,87 @@ export type ReagentStockItem = {
   note: string;
 };
 
-export async function createGitHubRestockOrder(tenantId: string): Promise<PurchaseOrder> {
-  const { data, error } = await supabase.rpc("create_restock_order", {
-    p_tenant_id: tenantId,
-    p_note: "一键补货",
-  });
-  if (error) throwError(error);
+export async function listOpenOrderReagentIds(tenantId: string): Promise<number[]> {
+  const reagentIds = new Set<number>();
+  const headerPageSize = 200;
+  for (let offset = 0; ; offset += headerPageSize) {
+    const { data, error } = await supabase
+      .from("purchase_orders")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("status", "submitted")
+      .order("id", { ascending: true })
+      .range(offset, offset + headerPageSize - 1);
+    if (error) throwError(error);
+    const headers = (data ?? []) as Array<{ id: unknown }>;
+    const orderIds = headers.map((row) => number(row.id)).filter((id) => id > 0);
+    if (orderIds.length > 0) {
+      const itemPageSize = 500;
+      for (let itemOffset = 0; ; itemOffset += itemPageSize) {
+        const { data: items, error: itemError } = await supabase
+          .from("purchase_order_items")
+          .select("reagent_id")
+          .eq("tenant_id", tenantId)
+          .in("order_id", orderIds)
+          .order("id", { ascending: true })
+          .range(itemOffset, itemOffset + itemPageSize - 1);
+        if (itemError) throwError(itemError);
+        const page = (items ?? []) as Array<{ reagent_id: unknown }>;
+        for (const item of page) reagentIds.add(number(item.reagent_id));
+        if (page.length < itemPageSize) break;
+      }
+    }
+    if (headers.length < headerPageSize) break;
+  }
+  return [...reagentIds];
+}
+
+async function loadCreatedOrder(tenantId: string, data: unknown): Promise<PurchaseOrder> {
   const id = number((data as { id?: number } | null)?.id ?? data);
   if (!id) throw new Error("创建采购单失败");
   const orders = await listGitHubOrders(tenantId);
   const found = orders.find((order) => order.id === id);
   if (!found) throw new Error("采购单读取失败");
   return found;
+}
+
+export async function createGitHubRestockOrder(tenantId: string): Promise<PurchaseOrder> {
+  const openIds = await listOpenOrderReagentIds(tenantId);
+  const guarded = await supabase.rpc("create_restock_order_once", {
+    p_tenant_id: tenantId,
+    p_note: "一键补货",
+  });
+  if (!guarded.error) return loadCreatedOrder(tenantId, guarded.data);
+  if (!isMissingRpc(guarded.error)) throwError(guarded.error);
+
+  // The installed database function still repeats every low-stock reagent.
+  // Refuse rather than create a second copy of reagents already on an open order.
+  const reagents = await listGitHubReagents(tenantId);
+  const { orderable, alreadyOrdered } = splitRestockCandidates(reagents, openIds);
+  if (orderable.length === 0) {
+    throw new Error("缺货试剂都已在未关闭的采购单中，不会重复下单");
+  }
+  if (alreadyOrdered.length > 0) {
+    throw new Error("已有未关闭采购单。当前不会把已下单的试剂再开一次");
+  }
+
+  const { data, error } = await supabase.rpc("create_restock_order", {
+    p_tenant_id: tenantId,
+    p_note: "一键补货",
+  });
+  if (error) throwError(error);
+  return loadCreatedOrder(tenantId, data);
+}
+
+export async function closeGitHubPurchaseOrder(tenantId: string, id: number): Promise<void> {
+  const { error } = await supabase.rpc("close_purchase_order", {
+    p_tenant_id: tenantId,
+    p_id: id,
+  });
+  if (error && isMissingRpc(error)) {
+    throw new Error("关闭采购单需要先更新数据库规则。库存不会因此改变");
+  }
+  if (error) throwError(error);
 }
 
 export async function receiveGitHubOrder(tenantId: string, id: number, operator: string): Promise<void> {

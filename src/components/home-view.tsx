@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { computeAlerts, formatWhen, orderText } from "@/lib/alerts";
 import { exportPurchaseOrderExcel } from "@/lib/export-excel";
+import { splitRestockCandidates } from "@/lib/restock";
 import type { PurchaseOrder, Reagent, ReagentAlert, StockRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -15,10 +16,11 @@ type Props = {
   hasMoreOrders?: boolean;
   loadingMoreOrders?: boolean;
   onLoadMoreOrders?: () => void;
+  openReagentIds?: number[];
   ordering: boolean;
-  receivingId: number | null;
+  closingId: number | null;
   onOrder: () => void;
-  onReceive: (id: number) => void;
+  onCloseOrder: (id: number) => void;
   canManagePurchases?: boolean;
   onGoScan: () => void;
   onGoReagents: () => void;
@@ -38,16 +40,17 @@ export function HomeView({
   hasMoreOrders = false,
   loadingMoreOrders = false,
   onLoadMoreOrders,
+  openReagentIds = [],
   ordering,
-  receivingId,
+  closingId,
   onOrder,
-  onReceive,
+  onCloseOrder,
   canManagePurchases = true,
   onGoScan,
   onGoReagents,
 }: Props) {
   const alerts = computeAlerts(reagents);
-  const lowCount = reagents.filter((r) => r.minStock > 0 && r.stockQuantity <= r.minStock).length;
+  const { low, alreadyOrdered, orderable } = splitRestockCandidates(reagents, openReagentIds);
   const totalStock = reagents.reduce((s, r) => s + r.stockQuantity, 0);
   const latestOrder = orders[0];
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
@@ -83,7 +86,7 @@ export function HomeView({
           {canManagePurchases ? (
             <Button
               onClick={onOrder}
-              disabled={ordering || lowCount === 0}
+              disabled={ordering || orderable.length === 0}
               className="h-11 w-full bg-surface text-primary hover:bg-bg-elevated disabled:bg-surface/50 sm:w-auto"
             >
               <PackagePlus className="size-4" />
@@ -91,9 +94,7 @@ export function HomeView({
             </Button>
           ) : null}
         </div>
-        <p className="mt-3 text-xs text-primary-fg/65">
-          {lowCount > 0 ? `将按安全库存为 ${lowCount} 项缺货试剂生成采购单` : "暂无低于安全库存的试剂"}
-        </p>
+        <p className="mt-3 text-xs text-primary-fg/65">{restockHint(low.length, orderable.length, alreadyOrdered.length)}</p>
       </section>
 
       <section className="grid grid-cols-3 gap-2">
@@ -145,11 +146,12 @@ export function HomeView({
               </div>
               {displayedOrder ? (
                 <OrderCard
+                  key={displayedOrder.id}
                   order={displayedOrder}
-                  busy={receivingId === displayedOrder.id}
+                  busy={closingId === displayedOrder.id}
                   onCopy={() => copyOrder(displayedOrder)}
                   onExport={() => exportOrder(displayedOrder)}
-                  onReceive={() => onReceive(displayedOrder.id)}
+                  onClose={() => onCloseOrder(displayedOrder.id)}
                   canManagePurchases={canManagePurchases}
                 />
               ) : null}
@@ -239,10 +241,17 @@ function Stat({ label, value, onClick }: { label: string; value: number; onClick
   );
 }
 
+function restockHint(low: number, orderable: number, alreadyOrdered: number): string {
+  if (low === 0) return "暂无低于安全库存的试剂";
+  if (orderable === 0) return `这 ${alreadyOrdered} 项缺货试剂已在未关闭采购单中，不会重复下单`;
+  if (alreadyOrdered > 0) return `将为 ${orderable} 项新缺货试剂生成采购单，另外 ${alreadyOrdered} 项已下单，不会重复`;
+  return `将按安全库存为 ${orderable} 项缺货试剂生成采购单。生成后未关闭前不会重复下单`;
+}
+
 function StatusPill({ status }: { status: PurchaseOrder["status"] }) {
   if (status === "received") return <Badge variant="ok">已入库</Badge>;
-  if (status === "cancelled") return <Badge variant="muted">已取消</Badge>;
-  return <Badge>待收货</Badge>;
+  if (status === "cancelled") return <Badge variant="muted">已关闭</Badge>;
+  return <Badge>已下单</Badge>;
 }
 
 function OrderCard({
@@ -250,16 +259,17 @@ function OrderCard({
   busy,
   onCopy,
   onExport,
-  onReceive,
+  onClose,
   canManagePurchases,
 }: {
   order: PurchaseOrder;
   busy: boolean;
   onCopy: () => void;
   onExport: () => void;
-  onReceive: () => void;
+  onClose: () => void;
   canManagePurchases: boolean;
 }) {
+  const [confirmClose, setConfirmClose] = useState(false);
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
@@ -277,6 +287,9 @@ function OrderCard({
           </li>
         ))}
       </ul>
+      {order.status === "submitted" ? (
+        <p className="mt-2 text-xs text-muted">未关闭前，这些试剂不会再次一键下单。关闭不改变库存，到货请扫码入库。</p>
+      ) : null}
       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
         <Button variant="outline" size="sm" className="h-11 flex-1 sm:h-9" onClick={onCopy}>
           <ClipboardCopy className="size-3.5" />
@@ -287,11 +300,25 @@ function OrderCard({
           导出 Excel
         </Button>
         {order.status === "submitted" && canManagePurchases ? (
-          <Button size="sm" className="h-11 flex-1 sm:h-9" disabled={busy} onClick={onReceive}>
-            {busy ? "入库中…" : "确认到货入库"}
+          <Button
+            size="sm"
+            variant={confirmClose ? "default" : "outline"}
+            className="h-11 flex-1 sm:h-9"
+            disabled={busy}
+            onClick={() => {
+              if (!confirmClose) {
+                setConfirmClose(true);
+                return;
+              }
+              onClose();
+            }}
+          >
+            {busy ? "关闭中…" : confirmClose ? "确认关闭，不改库存" : "关闭采购单"}
           </Button>
         ) : order.status === "submitted" ? (
-          <span className="flex h-11 flex-1 items-center justify-center text-xs text-muted sm:h-9">待管理员确认到货</span>
+          <span className="flex h-11 flex-1 items-center justify-center text-xs text-muted sm:h-9">已下单，关闭前不会重复</span>
+        ) : order.status === "cancelled" ? (
+          <span className="flex h-11 flex-1 items-center justify-center text-xs text-muted sm:h-9">已关闭，可再次下单</span>
         ) : (
           <span className="flex h-11 flex-1 items-center justify-center gap-1 text-xs text-ok sm:h-9">
             <Check className="size-3.5" />

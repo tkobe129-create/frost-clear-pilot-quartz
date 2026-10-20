@@ -11,15 +11,16 @@ import { computeAlerts } from "@/lib/alerts";
 
 import {
   checkPlatformAdmin,
+  closeGitHubPurchaseOrder,
   createGitHubRestockOrder,
   createTenantInvite,
+  listOpenOrderReagentIds,
   listAllGitHubStockRecords,
   listGitHubOrdersPage,
   listGitHubRecords,
   listGitHubReagents,
   listGitHubStockBatches,
   listMyTenantMemberships,
-  receiveGitHubOrder,
   signOutGitHubUser,
   saveGitHubReagent,
   adjustGitHubReagentStock,
@@ -49,7 +50,8 @@ export function GitHubPagesApp() {
   const [submitting, setSubmitting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [ordering, setOrdering] = useState(false);
-  const [receivingId, setReceivingId] = useState<number | null>(null);
+  const [openReagentIds, setOpenReagentIds] = useState<number[]>([]);
+  const [closingId, setClosingId] = useState<number | null>(null);
 
   const loadMemberships = useCallback(async () => {
     setAccessLoading(true);
@@ -133,16 +135,18 @@ export function GitHubPagesApp() {
   const refreshAll = useCallback(async () => {
     if (!tenantId) return;
     const nextReagents = await listGitHubReagents(tenantId);
-    const [nextRecords, orderPage, nextStockBatches] = await Promise.all([
+    const [nextRecords, orderPage, nextStockBatches, nextOpenReagentIds] = await Promise.all([
       listGitHubRecords(tenantId),
       listGitHubOrdersPage(tenantId),
       listGitHubStockBatches(tenantId, nextReagents),
+      listOpenOrderReagentIds(tenantId),
     ]);
     setReagents(nextReagents);
     setRecords(nextRecords);
     setStockBatches(nextStockBatches);
     setOrders(orderPage.orders);
     setHasMoreOrders(orderPage.hasMore);
+    setOpenReagentIds(nextOpenReagentIds);
   }, [tenantId]);
 
   useEffect(() => {
@@ -152,6 +156,7 @@ export function GitHubPagesApp() {
       setRecords([]);
       setStockBatches([]);
       setOrders([]);
+      setOpenReagentIds([]);
       return;
     }
     setLoading(true);
@@ -241,17 +246,17 @@ export function GitHubPagesApp() {
     return filter === "all" ? all : all.filter((record) => record.type === filter);
   }
 
-  async function handleReceive(id: number) {
+  async function handleCloseOrder(id: number) {
     if (!tenantId || !isAdmin) return;
-    setReceivingId(id);
+    setClosingId(id);
     try {
-      await receiveGitHubOrder(tenantId, id, operatorName);
+      await closeGitHubPurchaseOrder(tenantId, id);
       await refreshAll();
-      toast.success("到货已入库");
+      toast.success("采购单已关闭，库存未改变");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "入库失败");
+      toast.error(error instanceof Error ? error.message : "关闭采购单失败");
     } finally {
-      setReceivingId(null);
+      setClosingId(null);
     }
   }
 
@@ -345,10 +350,11 @@ export function GitHubPagesApp() {
           hasMoreOrders={hasMoreOrders}
           loadingMoreOrders={loadingMoreOrders}
           onLoadMoreOrders={() => void handleLoadMoreOrders()}
+          openReagentIds={openReagentIds}
           ordering={ordering}
-          receivingId={receivingId}
+          closingId={closingId}
           onOrder={() => void handleOrder()}
-          onReceive={(id) => void handleReceive(id)}
+          onCloseOrder={(id) => void handleCloseOrder(id)}
           canManagePurchases={isAdmin}
           onGoScan={() => setTab("scan")}
           onGoReagents={() => setTab("reagents")}

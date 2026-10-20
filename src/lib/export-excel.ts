@@ -10,8 +10,8 @@ function escapeCell(value: string | number): string {
 
 function orderStatus(status: PurchaseOrder["status"]): string {
   if (status === "received") return "已入库";
-  if (status === "cancelled") return "已取消";
-  return "待收货";
+  if (status === "cancelled") return "已关闭";
+  return "已下单";
 }
 
 /**
