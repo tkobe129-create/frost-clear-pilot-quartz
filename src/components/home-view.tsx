@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { computeAlerts, formatWhen, orderText } from "@/lib/alerts";
-import { exportPurchaseOrderExcel } from "@/lib/export-excel";
+import { savePurchaseOrderExcel } from "@/lib/export-excel";
 import { splitRestockCandidates } from "@/lib/restock";
 import type { PurchaseOrder, Reagent, ReagentAlert, StockRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -62,12 +62,14 @@ export function HomeView({
   }
 
   function exportOrder(order: PurchaseOrder) {
-    try {
-      exportPurchaseOrderExcel(order);
-      toast.success("采购单 Excel 已下载");
-    } catch {
-      toast.error("导出失败，请稍后重试");
-    }
+    void savePurchaseOrderExcel(order)
+      .then((result) => {
+        if (result === "cancelled") return;
+        toast.success(result === "shared" ? "请在分享菜单中存储到文件" : "采购单 Excel 已下载");
+      })
+      .catch(() => {
+        toast.error("导出失败，请稍后重试");
+      });
   }
 
   return (

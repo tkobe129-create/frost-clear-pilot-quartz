@@ -1,80 +1,9 @@
 import type { PurchaseOrder, StockRecord, StockType } from "@/lib/types";
 
-function escapeCell(value: string | number): string {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
 function orderStatus(status: PurchaseOrder["status"]): string {
   if (status === "received") return "已入库";
   if (status === "cancelled") return "已关闭";
   return "已下单";
-}
-
-/**
- * Exports an Excel-compatible workbook without a heavy spreadsheet dependency.
- * Excel opens the HTML table format directly and preserves Chinese text,
- * columns, quantities and the order summary on mobile and desktop.
- */
-export function exportPurchaseOrderExcel(order: PurchaseOrder): void {
-  if (typeof document === "undefined") return;
-
-  const rows = order.items
-    .map(
-      (item) => `
-        <tr>
-          <td>${escapeCell(order.id)}</td>
-          <td>${escapeCell(order.createdAt)}</td>
-          <td>${escapeCell(orderStatus(order.status))}</td>
-          <td>${escapeCell(item.name)}</td>
-          <td>${escapeCell(item.specification)}</td>
-          <td>${escapeCell(item.manufacturer)}</td>
-          <td>${escapeCell(item.supplier)}</td>
-          <td class="number">${escapeCell(item.quantity)}</td>
-          <td>${escapeCell(item.unit)}</td>
-        </tr>`,
-    )
-    .join("");
-
-  const html = `<!DOCTYPE html>
-<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-<head>
-  <meta charset="UTF-8">
-  <style>
-    table { border-collapse: collapse; }
-    th, td { border: 1px solid #b7b7b7; padding: 6px 10px; white-space: nowrap; }
-    th { background: #0e5c56; color: #ffffff; font-weight: bold; }
-    .number { mso-number-format: "0"; text-align: right; }
-  </style>
-</head>
-<body>
-  <h2>权盾智检采购单 #${escapeCell(order.id)}</h2>
-  <p>下单时间：${escapeCell(order.createdAt)} | 状态：${escapeCell(orderStatus(order.status))}</p>
-  <table>
-    <thead><tr>
-      <th>采购单号</th><th>下单时间</th><th>状态</th><th>试剂名称</th><th>规格</th>
-      <th>厂家</th><th>供应商</th><th>数量</th><th>单位</th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-    <tfoot><tr><th colspan="7">合计 ${order.itemCount} 项</th><th colspan="2"></th></tr></tfoot>
-  </table>
-</body>
-</html>`;
-
-  downloadExcel(`权盾智检-采购单-${order.id}.xls`, html);
-}
-
-function downloadExcel(filename: string, body: string, mime = "application/vnd.ms-excel;charset=utf-8") {
-  const blob = new Blob(["\ufeff", body], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function pad(value: number): string {
@@ -335,9 +264,9 @@ function buildLedgerSheet(records: StockRecord[], filter: "all" | StockType): { 
   return { sheet, strings: sst };
 }
 
-export function buildStockRecordsXlsx(records: StockRecord[], filter: "all" | StockType = "all"): Uint8Array {
-  const { sheet, strings } = buildLedgerSheet(records, filter);
+function packageXlsx(sheetName: string, sheet: string, strings: string): Uint8Array {
   const encode = (xml: string) => new TextEncoder().encode(xml);
+  const safeName = xmlText(sheetName.replace(/[\\/?*[\]:]/g, "").slice(0, 31) || "Sheet1");
   return zipXlsx([
     {
       name: "[Content_Types].xml",
@@ -362,7 +291,7 @@ export function buildStockRecordsXlsx(records: StockRecord[], filter: "all" | St
       name: "xl/workbook.xml",
       data: encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <sheets><sheet name="出入库记录" sheetId="1" r:id="rId1"/></sheets>
+  <sheets><sheet name="${safeName}" sheetId="1" r:id="rId1"/></sheets>
 </workbook>`),
     },
     {
@@ -378,6 +307,99 @@ export function buildStockRecordsXlsx(records: StockRecord[], filter: "all" | St
     { name: "xl/sharedStrings.xml", data: encode(strings) },
     { name: "xl/worksheets/sheet1.xml", data: encode(sheet) },
   ]);
+}
+
+function buildPurchaseSheet(order: PurchaseOrder): { sheet: string; strings: string } {
+  const strings: string[] = [];
+  const textId = (value: string) => {
+    const id = strings.length;
+    strings.push(value);
+    return id;
+  };
+  const textCell = (ref: string, style: number, value: string) =>
+    `<c r="${ref}" t="s" s="${style}"><v>${textId(value)}</v></c>`;
+  const numberCell = (ref: string, style: number, value: number) =>
+    `<c r="${ref}" s="${style}"><v>${value}</v></c>`;
+  const headers = ["采购单号", "下单时间", "状态", "试剂名称", "规格", "厂家", "供应商", "数量", "单位"];
+  const items = order.items;
+  const lastRow = Math.max(4, 4 + items.length);
+  const headerCells = headers.map((label, index) => textCell(`${columnName(index)}4`, 3, label)).join("");
+  const status = orderStatus(order.status);
+  const when = formatExportWhen(order.createdAt);
+  const totalQty = items.reduce((sum, item) => sum + item.quantity, 0);
+  const dataRows = items
+    .map((item, index) => {
+      const row = index + 5;
+      const band = index % 2 === 1;
+      const text = band ? 5 : 4;
+      const wrap = band ? 7 : 6;
+      const qty = band ? 9 : 8;
+      const longest = Math.max(item.name.length, item.specification.length, item.manufacturer.length, item.supplier.length);
+      const height = 16 + Math.min(4, Math.max(1, Math.ceil(longest / 14))) * 16;
+      const cells = [
+        numberCell(`A${row}`, qty, order.id),
+        textCell(`B${row}`, text, when),
+        textCell(`C${row}`, text, status),
+        textCell(`D${row}`, wrap, item.name),
+        textCell(`E${row}`, wrap, item.specification),
+        textCell(`F${row}`, wrap, item.manufacturer),
+        textCell(`G${row}`, wrap, item.supplier),
+        numberCell(`H${row}`, qty, item.quantity),
+        textCell(`I${row}`, text, item.unit),
+      ].join("");
+      return `<row r="${row}" ht="${height}" customHeight="1">${cells}</row>`;
+    })
+    .join("");
+  const title = `权盾智检 · 采购单 #${order.id}`;
+  const summary = `下单时间 ${when}    状态 ${status}    共 ${items.length} 项    数量合计 ${totalQty}`;
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:I${lastRow}"/>
+  <sheetViews>
+    <sheetView tabSelected="1" workbookViewId="0">
+      <pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/>
+    </sheetView>
+  </sheetViews>
+  <sheetFormatPr defaultRowHeight="20"/>
+  <cols>
+    <col min="1" max="1" width="12" customWidth="1"/>
+    <col min="2" max="2" width="20" customWidth="1"/>
+    <col min="3" max="3" width="12" customWidth="1"/>
+    <col min="4" max="4" width="24" customWidth="1"/>
+    <col min="5" max="5" width="18" customWidth="1"/>
+    <col min="6" max="6" width="18" customWidth="1"/>
+    <col min="7" max="7" width="18" customWidth="1"/>
+    <col min="8" max="8" width="10" customWidth="1"/>
+    <col min="9" max="9" width="10" customWidth="1"/>
+  </cols>
+  <sheetData>
+    <row r="1" ht="28" customHeight="1">${textCell("A1", 1, title)}</row>
+    <row r="2" ht="22" customHeight="1">${textCell("A2", 2, summary)}</row>
+    <row r="3" ht="8" customHeight="1"/>
+    <row r="4" ht="22" customHeight="1">${headerCells}</row>
+    ${dataRows}
+  </sheetData>
+  <autoFilter ref="A4:I${lastRow}"/>
+  <mergeCells count="2">
+    <mergeCell ref="A1:I1"/>
+    <mergeCell ref="A2:I2"/>
+  </mergeCells>
+</worksheet>`;
+  const sst = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${strings.length}" uniqueCount="${strings.length}">
+  ${strings.map((value) => `<si><t xml:space="preserve">${xmlText(value)}</t></si>`).join("")}
+</sst>`;
+  return { sheet, strings: sst };
+}
+
+export function buildPurchaseOrderXlsx(order: PurchaseOrder): Uint8Array {
+  const { sheet, strings } = buildPurchaseSheet(order);
+  return packageXlsx("采购单", sheet, strings);
+}
+
+export function buildStockRecordsXlsx(records: StockRecord[], filter: "all" | StockType = "all"): Uint8Array {
+  const { sheet, strings } = buildLedgerSheet(records, filter);
+  return packageXlsx("出入库记录", sheet, strings);
 }
 
 function fileBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -402,12 +424,11 @@ export type ExportSaveResult = "shared" | "downloaded" | "cancelled";
  * Saves a real .xlsx file. On iPhone this must run inside the tap handler:
  * Safari blocks a download that starts after an earlier network request.
  */
-export function saveStockRecordsExcel(records: StockRecord[], filter: "all" | StockType = "all"): Promise<ExportSaveResult> {
-  if (typeof document === "undefined" || records.length === 0) return Promise.resolve("cancelled");
-  const bytes = buildStockRecordsXlsx(records, filter);
-  const filename = `权盾智检-出入库记录-${recordScope(filter)}-${fileStamp()}.xlsx`;
-  const mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-  const file = new File([fileBuffer(bytes)], filename, { type: mime });
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+function saveWorkbook(bytes: Uint8Array, filename: string): Promise<ExportSaveResult> {
+  if (typeof document === "undefined") return Promise.resolve("cancelled");
+  const file = new File([fileBuffer(bytes)], filename, { type: XLSX_MIME });
   const canShare = typeof navigator.share === "function" && navigator.canShare?.({ files: [file] });
   if (canShare) {
     return navigator
@@ -421,4 +442,13 @@ export function saveStockRecordsExcel(records: StockRecord[], filter: "all" | St
   }
   downloadFile(file);
   return Promise.resolve("downloaded");
+}
+
+export function savePurchaseOrderExcel(order: PurchaseOrder): Promise<ExportSaveResult> {
+  return saveWorkbook(buildPurchaseOrderXlsx(order), `权盾智检-采购单-${order.id}.xlsx`);
+}
+
+export function saveStockRecordsExcel(records: StockRecord[], filter: "all" | StockType = "all"): Promise<ExportSaveResult> {
+  if (records.length === 0) return Promise.resolve("cancelled");
+  return saveWorkbook(buildStockRecordsXlsx(records, filter), `权盾智检-出入库记录-${recordScope(filter)}-${fileStamp()}.xlsx`);
 }
