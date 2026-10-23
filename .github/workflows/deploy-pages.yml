@@ -50,6 +50,24 @@ jobs:
         with:
           path: dist-github
 
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply database migrations
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::warning::SUPABASE_DB_URL is not set, so the database was not updated."
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          node scripts/apply-db-migrations.mjs
+
   deploy:
     # Use a dedicated environment so this fixed Arena branch is deployable
     # without the repository's main-branch-only protection on github-pages.
@@ -57,7 +75,7 @@ jobs:
       name: github-pages-arena
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, migrate]
     steps:
       - name: Deploy to GitHub Pages
         id: deployment

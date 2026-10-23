@@ -4,8 +4,6 @@ export const REQUIRED_DATABASE_FUNCTIONS = [
   { name: "create_restock_order_auto", label: "补货自动解锁" },
 ] as const;
 
-export const DATABASE_SQL_EDITOR_URL = "https://supabase.com/dashboard/project/eqgrtoeivuykemfferwb/sql/new";
-
 /**
  * Read a PostgREST OpenAPI document for the signed-in role.
  * An incomplete document is treated as unknown, not as a missing patch,
