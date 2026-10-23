@@ -33,7 +33,7 @@ begin
       and p.proname in (
         'is_tenant_member', 'is_tenant_admin', 'is_platform_admin', 'claim_default_tenant',
         'create_tenant', 'create_platform_tenant', 'create_tenant_invite', 'accept_tenant_invite',
-        'submit_stock_batch', 'create_restock_order', 'create_restock_order_once', 'create_restock_order_auto', 'restock_line_still_blocks', 'close_purchase_order', 'receive_purchase_order', 'save_reagent',
+        'submit_stock_batch', 'create_restock_order', 'create_restock_order_once', 'create_restock_order_auto', 'restock_line_still_blocks', 'close_purchase_order', 'receive_purchase_order', 'save_reagent', 'delete_reagent',
         'list_platform_tenants', 'set_platform_tenant_status'
       )
   loop
@@ -731,6 +731,51 @@ grant execute on function public.accept_tenant_invite(text) to authenticated;
 revoke all on function public.list_available_stock_batches(uuid) from public, anon;
 revoke all on function public.save_reagent(uuid, bigint, jsonb, integer, text) from public, anon;
 grant execute on function public.save_reagent(uuid, bigint, jsonb, integer, text) to authenticated;
+
+create or replace function public.delete_reagent(p_tenant_id uuid, p_id bigint)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  reagent_row public.reagents;
+begin
+  if not public.is_tenant_admin(p_tenant_id) then
+    raise exception '只有检验科管理员可以删除试剂';
+  end if;
+
+  select * into reagent_row
+  from public.reagents
+  where id = p_id and tenant_id = p_tenant_id
+  for update;
+
+  if reagent_row.id is null then
+    raise exception '试剂不存在或不属于当前检验科';
+  end if;
+
+  delete from public.stock_records
+  where tenant_id = p_tenant_id and reagent_id = p_id;
+
+  with removed as (
+    delete from public.purchase_order_items
+    where tenant_id = p_tenant_id and reagent_id = p_id
+    returning order_id
+  )
+  update public.purchase_orders as orders
+  set item_count = (
+    select count(*)
+    from public.purchase_order_items as items
+    where items.order_id = orders.id and items.tenant_id = orders.tenant_id
+  )
+  where orders.tenant_id = p_tenant_id
+    and orders.id in (select removed.order_id from removed);
+
+  delete from public.reagents
+  where id = p_id and tenant_id = p_tenant_id;
+end;
+$$;
+
+revoke all on function public.delete_reagent(uuid, bigint) from public, anon;
+grant execute on function public.delete_reagent(uuid, bigint) to authenticated;
 grant execute on function public.list_available_stock_batches(uuid) to authenticated;
 grant execute on function public.submit_stock_batch(uuid, text, text, text, text, jsonb) to authenticated;
 grant execute on function public.create_restock_order(uuid, text) to authenticated;

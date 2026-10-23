@@ -360,6 +360,17 @@ export async function listGitHubOrders(tenantId: string): Promise<PurchaseOrder[
   return (await listGitHubOrdersPage(tenantId, 0, 4)).orders;
 }
 
+export async function deleteGitHubReagent(tenantId: string, reagentId: number): Promise<void> {
+  const { error } = await supabase.rpc("delete_reagent", {
+    p_tenant_id: tenantId,
+    p_id: reagentId,
+  });
+  if (error && isMissingRpc(error)) {
+    throw new Error("删除试剂需要先在数据库执行补丁，否则库存流水删不掉");
+  }
+  if (error) throwError(error);
+}
+
 export async function saveGitHubReagent(tenantId: string, data: SavePayload, operator: string): Promise<Reagent> {
   const { data: result, error } = await supabase.rpc("save_reagent", {
     p_tenant_id: tenantId,

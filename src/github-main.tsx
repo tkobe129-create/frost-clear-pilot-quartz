@@ -12,6 +12,7 @@ import { computeAlerts } from "@/lib/alerts";
 import {
   checkPlatformAdmin,
   createGitHubRestockOrder,
+  deleteGitHubReagent,
   createTenantInvite,
   listLockedRestockReagentIds,
   listAllGitHubStockRecords,
@@ -200,6 +201,18 @@ export function GitHubPagesApp() {
     }
   }
 
+  async function handleDeleteReagent(reagentId: number) {
+    if (!tenantId || !isAdmin) return;
+    try {
+      await deleteGitHubReagent(tenantId, reagentId);
+      await refreshAll();
+      toast.success("试剂及库存已删除");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "删除失败");
+      throw error;
+    }
+  }
+
   async function handleAdjustStock({
     reagentId,
     actualStock,
@@ -359,6 +372,7 @@ export function GitHubPagesApp() {
           saving={saving}
           onSave={handleSave}
           onAdjustStock={handleAdjustStock}
+          onDelete={handleDeleteReagent}
           canManage={isAdmin}
         />
       ) : null}
