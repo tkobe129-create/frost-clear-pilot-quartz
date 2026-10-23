@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { toast, Toaster } from "sonner";
+import { DatabaseContractNotice } from "@/components/database-contract-notice";
 import { TenantAuthScreen, TenantDisabledScreen, TenantOnboardingScreen, TenantPlatformManagement } from "@/components/tenant-access";
 import { HomeView } from "@/components/home-view";
 import { RecordsView } from "@/components/records-view";
@@ -15,6 +16,7 @@ import {
   deleteGitHubReagent,
   createTenantInvite,
   listLockedRestockReagentIds,
+  probeRequiredDatabaseFunctions,
   listAllGitHubStockRecords,
   listGitHubOrdersPage,
   listGitHubRecords,
@@ -51,6 +53,7 @@ export function GitHubPagesApp() {
   const [saving, setSaving] = useState(false);
   const [ordering, setOrdering] = useState(false);
   const [openReagentIds, setOpenReagentIds] = useState<number[]>([]);
+  const [databaseGaps, setDatabaseGaps] = useState<string[]>([]);
 
   const loadMemberships = useCallback(async () => {
     setAccessLoading(true);
@@ -127,6 +130,20 @@ export function GitHubPagesApp() {
 
   const tenantId = membership?.tenant.id ?? null;
   const isAdmin = membership?.role === "admin";
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setDatabaseGaps([]);
+      return;
+    }
+    let active = true;
+    void probeRequiredDatabaseFunctions().then((missing) => {
+      if (active) setDatabaseGaps(missing);
+    });
+    return () => {
+      active = false;
+    };
+  }, [isAdmin]);
   const metadata = (user?.user_metadata ?? {}) as Record<string, unknown>;
   const displayName = typeof metadata.display_name === "string" && metadata.display_name.trim() ? metadata.display_name.trim() : "";
   const operatorName = displayName || user?.email || "";
@@ -324,6 +341,7 @@ export function GitHubPagesApp() {
       onManageTenants={() => setPlatformManagementOpen(true)}
       onSignOut={() => void signOutGitHubUser()}
     >
+      <DatabaseContractNotice missing={databaseGaps} />
       {platformManagementOpen ? (
         <div className="flex flex-col gap-4">
           <button

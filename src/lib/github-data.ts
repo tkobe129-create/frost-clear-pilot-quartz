@@ -11,6 +11,7 @@ import type {
   TenantRole,
 } from "@/lib/types";
 import type { SavePayload } from "@/components/reagents-view";
+import { missingDatabaseFunctionsFromOpenApi } from "@/lib/db-contract";
 import { lockedRestockReagentIds, splitRestockCandidates, type RestockLedgerRow, type RestockOrderLine } from "@/lib/restock";
 import { reconstructAvailableBatches } from "@/lib/stock-batches";
 
@@ -32,6 +33,25 @@ function throwError(error: unknown): never {
   const message =
     error && typeof error === "object" && "message" in error ? String((error as { message: unknown }).message) : "";
   throw new Error(message || "操作失败，请稍后再试");
+}
+
+export async function probeRequiredDatabaseFunctions(): Promise<string[]> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) return [];
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/`, {
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${token}`,
+        Accept: "application/openapi+json",
+      },
+    });
+    if (!response.ok) return [];
+    return missingDatabaseFunctionsFromOpenApi(await response.text());
+  } catch {
+    return [];
+  }
 }
 
 function isMissingRpc(error: unknown): boolean {
