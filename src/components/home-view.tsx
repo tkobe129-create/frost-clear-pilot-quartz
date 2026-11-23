@@ -4,7 +4,8 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { computeAlerts, formatWhen, orderText } from "@/lib/alerts";
-import { exportPurchaseOrderExcel } from "@/lib/export-excel";
+import { savePurchaseOrderExcel } from "@/lib/export-excel";
+import { splitRestockCandidates } from "@/lib/restock";
 import type { PurchaseOrder, Reagent, ReagentAlert, StockRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -15,10 +16,9 @@ type Props = {
   hasMoreOrders?: boolean;
   loadingMoreOrders?: boolean;
   onLoadMoreOrders?: () => void;
+  openReagentIds?: number[];
   ordering: boolean;
-  receivingId: number | null;
   onOrder: () => void;
-  onReceive: (id: number) => void;
   canManagePurchases?: boolean;
   onGoScan: () => void;
   onGoReagents: () => void;
@@ -38,16 +38,15 @@ export function HomeView({
   hasMoreOrders = false,
   loadingMoreOrders = false,
   onLoadMoreOrders,
+  openReagentIds = [],
   ordering,
-  receivingId,
   onOrder,
-  onReceive,
   canManagePurchases = true,
   onGoScan,
   onGoReagents,
 }: Props) {
   const alerts = computeAlerts(reagents);
-  const lowCount = reagents.filter((r) => r.minStock > 0 && r.stockQuantity <= r.minStock).length;
+  const { low, alreadyOrdered, orderable } = splitRestockCandidates(reagents, openReagentIds);
   const totalStock = reagents.reduce((s, r) => s + r.stockQuantity, 0);
   const latestOrder = orders[0];
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
@@ -63,12 +62,14 @@ export function HomeView({
   }
 
   function exportOrder(order: PurchaseOrder) {
-    try {
-      exportPurchaseOrderExcel(order);
-      toast.success("采购单 Excel 已下载");
-    } catch {
-      toast.error("导出失败，请稍后重试");
-    }
+    void savePurchaseOrderExcel(order)
+      .then((result) => {
+        if (result === "cancelled") return;
+        toast.success(result === "shared" ? "请在分享菜单中存储到文件" : "采购单 Excel 已下载");
+      })
+      .catch(() => {
+        toast.error("导出失败，请稍后重试");
+      });
   }
 
   return (
@@ -83,7 +84,7 @@ export function HomeView({
           {canManagePurchases ? (
             <Button
               onClick={onOrder}
-              disabled={ordering || lowCount === 0}
+              disabled={ordering || orderable.length === 0}
               className="h-11 w-full bg-surface text-primary hover:bg-bg-elevated disabled:bg-surface/50 sm:w-auto"
             >
               <PackagePlus className="size-4" />
@@ -91,9 +92,7 @@ export function HomeView({
             </Button>
           ) : null}
         </div>
-        <p className="mt-3 text-xs text-primary-fg/65">
-          {lowCount > 0 ? `将按安全库存为 ${lowCount} 项缺货试剂生成采购单` : "暂无低于安全库存的试剂"}
-        </p>
+        <p className="mt-3 text-xs text-primary-fg/65">{restockHint(low.length, orderable.length, alreadyOrdered.length)}</p>
       </section>
 
       <section className="grid grid-cols-3 gap-2">
@@ -145,12 +144,10 @@ export function HomeView({
               </div>
               {displayedOrder ? (
                 <OrderCard
+                  key={displayedOrder.id}
                   order={displayedOrder}
-                  busy={receivingId === displayedOrder.id}
-                  onCopy={() => copyOrder(displayedOrder)}
+                  onCopy={() => void copyOrder(displayedOrder)}
                   onExport={() => exportOrder(displayedOrder)}
-                  onReceive={() => onReceive(displayedOrder.id)}
-                  canManagePurchases={canManagePurchases}
                 />
               ) : null}
               {orders.length > 1 ? (
@@ -239,26 +236,27 @@ function Stat({ label, value, onClick }: { label: string; value: number; onClick
   );
 }
 
+function restockHint(low: number, orderable: number, alreadyOrdered: number): string {
+  if (low === 0) return "暂无低于安全库存的试剂";
+  if (orderable === 0) return `这 ${alreadyOrdered} 项仍低于安全库存，且入库后还没高过安全库存，不会重复下单`;
+  if (alreadyOrdered > 0) return `将为 ${orderable} 项生成采购单。另外 ${alreadyOrdered} 项已下单，库存还没高过安全库存，不会重复`;
+  return `将按安全库存为 ${orderable} 项缺货试剂生成采购单`;
+}
+
 function StatusPill({ status }: { status: PurchaseOrder["status"] }) {
   if (status === "received") return <Badge variant="ok">已入库</Badge>;
-  if (status === "cancelled") return <Badge variant="muted">已取消</Badge>;
-  return <Badge>待收货</Badge>;
+  if (status === "cancelled") return <Badge variant="muted">已关闭</Badge>;
+  return <Badge>已下单</Badge>;
 }
 
 function OrderCard({
   order,
-  busy,
   onCopy,
   onExport,
-  onReceive,
-  canManagePurchases,
 }: {
   order: PurchaseOrder;
-  busy: boolean;
   onCopy: () => void;
   onExport: () => void;
-  onReceive: () => void;
-  canManagePurchases: boolean;
 }) {
   return (
     <div>
@@ -277,6 +275,9 @@ function OrderCard({
           </li>
         ))}
       </ul>
+      {order.status === "submitted" ? (
+        <p className="mt-2 text-xs text-muted">这是采购清单，不改库存。到货请扫码入库。库存曾经高于安全库存后，再次缺货可以直接再下。</p>
+      ) : null}
       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
         <Button variant="outline" size="sm" className="h-11 flex-1 sm:h-9" onClick={onCopy}>
           <ClipboardCopy className="size-3.5" />
@@ -286,18 +287,6 @@ function OrderCard({
           <Download className="size-3.5" />
           导出 Excel
         </Button>
-        {order.status === "submitted" && canManagePurchases ? (
-          <Button size="sm" className="h-11 flex-1 sm:h-9" disabled={busy} onClick={onReceive}>
-            {busy ? "入库中…" : "确认到货入库"}
-          </Button>
-        ) : order.status === "submitted" ? (
-          <span className="flex h-11 flex-1 items-center justify-center text-xs text-muted sm:h-9">待管理员确认到货</span>
-        ) : (
-          <span className="flex h-11 flex-1 items-center justify-center gap-1 text-xs text-ok sm:h-9">
-            <Check className="size-3.5" />
-            已计入库存
-          </span>
-        )}
       </div>
     </div>
   );

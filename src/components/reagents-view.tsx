@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { ArrowLeft, Camera, ChevronRight, FolderOpen, Plus, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Camera, ChevronRight, FolderOpen, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ScannerOverlay } from "@/components/scanner-overlay";
 import { Badge } from "@/components/ui/badge";
@@ -108,11 +108,133 @@ export type SavePayload = {
   unitPrice: number;
 };
 
+const DELETE_REVEAL = 88;
+
+function SwipeDeleteRow({
+  enabled,
+  open,
+  onOpenChange,
+  onRequestDelete,
+  children,
+}: {
+  enabled: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onRequestDelete: () => void;
+  children: ReactNode;
+}) {
+  const [offset, setOffset] = useState(open ? DELETE_REVEAL : 0);
+  const [dragging, setDragging] = useState(false);
+  const startX = useRef(0);
+  const startY = useRef(0);
+  const startOffset = useRef(0);
+  const tracking = useRef(false);
+  const horizontal = useRef(false);
+  const moved = useRef(false);
+
+  useEffect(() => {
+    if (!dragging) setOffset(open ? DELETE_REVEAL : 0);
+  }, [open, dragging]);
+
+  function finish(clientX: number) {
+    const wasHorizontal = horizontal.current;
+    const next = Math.max(0, Math.min(160, startOffset.current + (clientX - startX.current)));
+    tracking.current = false;
+    horizontal.current = false;
+    setDragging(false);
+    if (!wasHorizontal) return;
+    moved.current = true;
+    if (next >= 132) {
+      setOffset(0);
+      onOpenChange(false);
+      onRequestDelete();
+      return;
+    }
+    if (next >= 44) {
+      setOffset(DELETE_REVEAL);
+      onOpenChange(true);
+      return;
+    }
+    setOffset(0);
+    onOpenChange(false);
+  }
+
+  return (
+    <div className="relative overflow-hidden rounded-xl">
+      {enabled ? (
+        <button
+          type="button"
+          className="absolute inset-y-0 left-0 flex w-[88px] items-center justify-center gap-1 bg-danger text-sm font-medium text-primary-fg"
+          onClick={onRequestDelete}
+        >
+          <Trash2 className="size-4" />
+          删除
+        </button>
+      ) : null}
+      <div
+        className="relative"
+        style={{
+          transform: enabled ? `translateX(${offset}px)` : undefined,
+          transition: dragging ? "none" : "transform 180ms ease",
+          touchAction: "pan-y",
+        }}
+        onPointerDown={(event) => {
+          if (!enabled || event.button !== 0) return;
+          tracking.current = true;
+          horizontal.current = false;
+          startX.current = event.clientX;
+          startY.current = event.clientY;
+          startOffset.current = open ? DELETE_REVEAL : offset;
+          setDragging(true);
+        }}
+        onPointerMove={(event) => {
+          if (!tracking.current) return;
+          const dx = event.clientX - startX.current;
+          const dy = event.clientY - startY.current;
+          if (!horizontal.current) {
+            if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) {
+              tracking.current = false;
+              setDragging(false);
+              setOffset(open ? DELETE_REVEAL : 0);
+              return;
+            }
+            if (Math.abs(dx) < 8) return;
+            horizontal.current = true;
+            try {
+              event.currentTarget.setPointerCapture(event.pointerId);
+            } catch {
+              // iOS may reject capture during a scroll gesture.
+            }
+          }
+          setOffset(Math.max(0, Math.min(160, startOffset.current + dx)));
+        }}
+        onPointerUp={(event) => {
+          if (!tracking.current) return;
+          finish(event.clientX);
+        }}
+        onPointerCancel={(event) => {
+          if (!tracking.current) return;
+          finish(event.clientX);
+        }}
+        onClickCapture={(event) => {
+          if (!moved.current) return;
+          event.preventDefault();
+          event.stopPropagation();
+          moved.current = false;
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function ReagentsView({
   reagents,
   saving,
   onSave,
   onAdjustStock,
+  onDelete,
   canManage = true,
 }: {
   reagents: Reagent[];
@@ -125,6 +247,7 @@ export function ReagentsView({
     expiryDate: string;
     reason: string;
   }) => Promise<void>;
+  onDelete?: (reagentId: number) => Promise<void>;
   canManage?: boolean;
 }) {
   const [q, setQ] = useState("");
@@ -139,6 +262,9 @@ export function ReagentsView({
   const [adjustExpiryDate, setAdjustExpiryDate] = useState("");
   const [adjustReason, setAdjustReason] = useState("日常盘点纠偏");
   const [adjusting, setAdjusting] = useState(false);
+  const [openSwipeId, setOpenSwipeId] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Reagent | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const categorySummaries = useMemo(() => {
     const grouped = new Map<string, { category: string; reagents: Reagent[]; totalStock: number; lowCount: number; outCount: number }>();
@@ -568,6 +694,7 @@ export function ReagentsView({
           <h2 className="truncate text-sm font-semibold">{selectedCategory}</h2>
           <p className="mt-0.5 text-xs text-muted">
             {categoryReagents.length} 种试剂 · 库存合计 <strong className="font-semibold text-fg tabular">{selectedTotalStock}</strong>
+            {canManage && onDelete ? " · 向右滑动可删除" : ""}
           </p>
         </div>
         {canManage ? (
@@ -591,9 +718,22 @@ export function ReagentsView({
           const expiring = days !== null && days >= 0 && days <= 30;
           return (
             <li key={r.id}>
+              <SwipeDeleteRow
+                enabled={Boolean(canManage && onDelete)}
+                open={openSwipeId === r.id}
+                onOpenChange={(next) => setOpenSwipeId(next ? r.id : openSwipeId === r.id ? null : openSwipeId)}
+                onRequestDelete={() => {
+                  setOpenSwipeId(null);
+                  setPendingDelete(r);
+                }}
+              >
               <button
                 type="button"
                 onClick={() => {
+                  if (openSwipeId === r.id) {
+                    setOpenSwipeId(null);
+                    return;
+                  }
                   if (canManage) setDraft(fromReagent(r));
                   else toast.info("只有检验科管理员可以编辑试剂资料");
                 }}
@@ -622,11 +762,53 @@ export function ReagentsView({
                 </div>
                 <ChevronRight className="size-4 shrink-0 text-subtle" />
               </button>
+              </SwipeDeleteRow>
             </li>
           );
         })}
       </ul>
       {filtered.length === 0 ? <p className="py-10 text-center text-sm text-muted">没有匹配的试剂</p> : null}
+      {pendingDelete ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+          onClick={() => {
+            if (!deleting) setPendingDelete(null);
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-border bg-surface p-4 shadow-card"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p className="text-sm font-semibold">删除「{pendingDelete.name}」？</p>
+            <p className="mt-1 text-xs leading-5 text-muted">
+              将同时删除该试剂、库存流水，以及采购单里的对应明细。此操作不能恢复。
+            </p>
+            <div className="mt-4 flex gap-2">
+              <Button variant="outline" className="flex-1" disabled={deleting} onClick={() => setPendingDelete(null)}>
+                取消
+              </Button>
+              <Button
+                variant="danger"
+                className="flex-1"
+                disabled={deleting || !onDelete}
+                onClick={() => {
+                  if (!onDelete) return;
+                  setDeleting(true);
+                  void onDelete(pendingDelete.id)
+                    .then(() => {
+                      setPendingDelete(null);
+                      setOpenSwipeId(null);
+                    })
+                    .catch(() => undefined)
+                    .finally(() => setDeleting(false));
+                }}
+              >
+                {deleting ? "删除中…" : "确认删除"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

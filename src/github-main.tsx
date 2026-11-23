@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { toast, Toaster } from "sonner";
+import { DatabaseContractNotice } from "@/components/database-contract-notice";
 import { TenantAuthScreen, TenantDisabledScreen, TenantOnboardingScreen, TenantPlatformManagement } from "@/components/tenant-access";
 import { HomeView } from "@/components/home-view";
 import { RecordsView } from "@/components/records-view";
@@ -8,16 +9,20 @@ import { ReagentsView, type SavePayload } from "@/components/reagents-view";
 import { ScanView } from "@/components/scan-view";
 import { AppShell, type TabId } from "@/components/shell";
 import { computeAlerts } from "@/lib/alerts";
+
 import {
   checkPlatformAdmin,
   createGitHubRestockOrder,
+  deleteGitHubReagent,
   createTenantInvite,
+  listLockedRestockReagentIds,
+  probeRequiredDatabaseFunctions,
+  listAllGitHubStockRecords,
   listGitHubOrdersPage,
   listGitHubRecords,
   listGitHubReagents,
   listGitHubStockBatches,
   listMyTenantMemberships,
-  receiveGitHubOrder,
   signOutGitHubUser,
   saveGitHubReagent,
   adjustGitHubReagentStock,
@@ -47,7 +52,8 @@ export function GitHubPagesApp() {
   const [submitting, setSubmitting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [ordering, setOrdering] = useState(false);
-  const [receivingId, setReceivingId] = useState<number | null>(null);
+  const [openReagentIds, setOpenReagentIds] = useState<number[]>([]);
+  const [databaseGaps, setDatabaseGaps] = useState<string[]>([]);
 
   const loadMemberships = useCallback(async () => {
     setAccessLoading(true);
@@ -124,6 +130,20 @@ export function GitHubPagesApp() {
 
   const tenantId = membership?.tenant.id ?? null;
   const isAdmin = membership?.role === "admin";
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setDatabaseGaps([]);
+      return;
+    }
+    let active = true;
+    void probeRequiredDatabaseFunctions().then((missing) => {
+      if (active) setDatabaseGaps(missing);
+    });
+    return () => {
+      active = false;
+    };
+  }, [isAdmin]);
   const metadata = (user?.user_metadata ?? {}) as Record<string, unknown>;
   const displayName = typeof metadata.display_name === "string" && metadata.display_name.trim() ? metadata.display_name.trim() : "";
   const operatorName = displayName || user?.email || "";
@@ -131,16 +151,18 @@ export function GitHubPagesApp() {
   const refreshAll = useCallback(async () => {
     if (!tenantId) return;
     const nextReagents = await listGitHubReagents(tenantId);
-    const [nextRecords, orderPage, nextStockBatches] = await Promise.all([
+    const [nextRecords, orderPage, nextStockBatches, nextOpenReagentIds] = await Promise.all([
       listGitHubRecords(tenantId),
       listGitHubOrdersPage(tenantId),
       listGitHubStockBatches(tenantId, nextReagents),
+      listLockedRestockReagentIds(tenantId, nextReagents),
     ]);
     setReagents(nextReagents);
     setRecords(nextRecords);
     setStockBatches(nextStockBatches);
     setOrders(orderPage.orders);
     setHasMoreOrders(orderPage.hasMore);
+    setOpenReagentIds(nextOpenReagentIds);
   }, [tenantId]);
 
   useEffect(() => {
@@ -150,6 +172,7 @@ export function GitHubPagesApp() {
       setRecords([]);
       setStockBatches([]);
       setOrders([]);
+      setOpenReagentIds([]);
       return;
     }
     setLoading(true);
@@ -195,6 +218,18 @@ export function GitHubPagesApp() {
     }
   }
 
+  async function handleDeleteReagent(reagentId: number) {
+    if (!tenantId || !isAdmin) return;
+    try {
+      await deleteGitHubReagent(tenantId, reagentId);
+      await refreshAll();
+      toast.success("试剂及库存已删除");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "删除失败");
+      throw error;
+    }
+  }
+
   async function handleAdjustStock({
     reagentId,
     actualStock,
@@ -233,18 +268,10 @@ export function GitHubPagesApp() {
     }
   }
 
-  async function handleReceive(id: number) {
-    if (!tenantId || !isAdmin) return;
-    setReceivingId(id);
-    try {
-      await receiveGitHubOrder(tenantId, id, operatorName);
-      await refreshAll();
-      toast.success("到货已入库");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "入库失败");
-    } finally {
-      setReceivingId(null);
-    }
+  async function handleExportRecords(filter: "all" | StockType) {
+    if (!tenantId) return [];
+    const all = await listAllGitHubStockRecords(tenantId);
+    return filter === "all" ? all : all.filter((record) => record.type === filter);
   }
 
   async function handleInvite() {
@@ -314,6 +341,7 @@ export function GitHubPagesApp() {
       onManageTenants={() => setPlatformManagementOpen(true)}
       onSignOut={() => void signOutGitHubUser()}
     >
+      <DatabaseContractNotice missing={databaseGaps} />
       {platformManagementOpen ? (
         <div className="flex flex-col gap-4">
           <button
@@ -337,10 +365,9 @@ export function GitHubPagesApp() {
           hasMoreOrders={hasMoreOrders}
           loadingMoreOrders={loadingMoreOrders}
           onLoadMoreOrders={() => void handleLoadMoreOrders()}
+          openReagentIds={openReagentIds}
           ordering={ordering}
-          receivingId={receivingId}
           onOrder={() => void handleOrder()}
-          onReceive={(id) => void handleReceive(id)}
           canManagePurchases={isAdmin}
           onGoScan={() => setTab("scan")}
           onGoReagents={() => setTab("reagents")}
@@ -363,11 +390,14 @@ export function GitHubPagesApp() {
           saving={saving}
           onSave={handleSave}
           onAdjustStock={handleAdjustStock}
+          onDelete={handleDeleteReagent}
           canManage={isAdmin}
         />
       ) : null}
 
-          {!loading && tab === "records" ? <RecordsView records={records} /> : null}
+          {!loading && tab === "records" ? (
+            <RecordsView records={records} onExport={handleExportRecords} />
+          ) : null}
         </>
       )}
     </AppShell>

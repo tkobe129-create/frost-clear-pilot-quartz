@@ -84,8 +84,50 @@ export function createZxingReader(): BrowserMultiFormatReader {
   });
 }
 
+function isAndroidDevice() {
+  return typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent || "");
+}
+
+/** 720p cap + continuous AF. Used first on Android so preview stays smooth. */
+const ANDROID_VIDEO: MediaTrackConstraints = {
+  facingMode: { ideal: "environment" },
+  width: { ideal: 1280, max: 1920 },
+  height: { ideal: 720, max: 1080 },
+  frameRate: { ideal: 30, min: 15 },
+  advanced: [{ focusMode: "continuous" } as MediaTrackConstraintSet],
+};
+
+async function activateContinuousFocus(stream: MediaStream) {
+  const track = stream.getVideoTracks()[0];
+  if (!track?.getCapabilities) return;
+  const caps = track.getCapabilities() as MediaTrackCapabilities & { focusMode?: string[] };
+  if (!caps?.focusMode?.includes("continuous")) return;
+  try {
+    await track.applyConstraints({
+      advanced: [{ focusMode: "continuous" } as unknown as MediaTrackConstraintSet],
+    });
+  } catch {
+    /* some WebViews advertise continuous focus but reject the constraint */
+  }
+}
+
 export async function openBackCamera(): Promise<MediaStream> {
-  const attempts: MediaStreamConstraints[] = [
+  const attempts: MediaStreamConstraints[] = [];
+  if (isAndroidDevice()) {
+    attempts.push({ audio: false, video: ANDROID_VIDEO });
+    // Same 720p budget without advanced focusMode — a few Android WebViews
+    // throw OverconstrainedError on unknown advanced keys.
+    attempts.push({
+      audio: false,
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 },
+        frameRate: { ideal: 30, min: 15 },
+      },
+    });
+  }
+  attempts.push(
     {
       audio: false,
       video: {
@@ -104,16 +146,20 @@ export async function openBackCamera(): Promise<MediaStream> {
     },
     { audio: false, video: { facingMode: "environment" } },
     { audio: false, video: true },
-  ];
+  );
   let last: unknown;
+  let stream: MediaStream | null = null;
   for (const constraints of attempts) {
     try {
-      return await navigator.mediaDevices.getUserMedia(constraints);
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      break;
     } catch (err) {
       last = err;
     }
   }
-  throw last instanceof Error ? last : new Error("无法打开摄像头");
+  if (!stream) throw last instanceof Error ? last : new Error("无法打开摄像头");
+  await activateContinuousFocus(stream);
+  return stream;
 }
 
 export function prepareVideo(video: HTMLVideoElement, stream: MediaStream) {
