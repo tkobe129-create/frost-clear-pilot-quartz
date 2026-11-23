@@ -2,28 +2,51 @@ name: Keep Supabase Alive
 
 on:
   schedule:
-    # 国际标准时间每周一、周四上午 09:00 自动触发（北京时间 17:00）
-    # 频率为 3~4 天一次，远低于 7 天休眠门槛，安全稳妥
-    - cron: '0 9 * * 1,4'
-  workflow_dispatch: # 支持在 GitHub Actions 页面手动点击测试
+    # 每 4 小时一次：UTC 00:17、04:17、08:17、12:17、16:17、20:17
+    # （北京时间 08:17、12:17、16:17、20:17、00:17、04:17）。
+    # 免费版看过去 7 天里每天有没有几次数据库请求。周一、周四各读一行不够。
+    # 分钟用 17，避开整点，减少 GitHub 定时任务挤在整点被推迟或丢掉。
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
 
 jobs:
   ping:
     name: Ping Supabase Database
     runs-on: ubuntu-latest
     steps:
-      - name: Send keep-alive ping to Supabase REST API
+      - name: Send keep-alive pings to Supabase REST API
+        env:
+          SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVxZ3J0b2VpdnV5a2VtZmZlcndiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1Njc0OTQsImV4cCI6MjEwNTE0MzQ5NH0.Jttf6wm6RVj2knEagvw3Y-wFrKTl5I5RvF4pVUqHVRA
         run: |
-          RESPONSE=$(curl -s -w "%{http_code}" -o /dev/null -X GET \
-            "https://eqgrtoeivuykemfferwb.supabase.co/rest/v1/reagents?select=id&limit=1" \
-            -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVxZ3J0b2VpdnV5a2VtZmZlcndiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1Njc0OTQsImV4cCI6MjEwNTE0MzQ5NH0.Jttf6wm6RVj2knEagvw3Y-wFrKTl5I5RvF4pVUqHVRA" \
-            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVxZ3J0b2VpdnV5a2VtZmZlcndiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1Njc0OTQsImV4cCI6MjEwNTE0MzQ5NH0.Jttf6wm6RVj2knEagvw3Y-wFrKTl5I5RvF4pVUqHVRA")
-
-          echo "Supabase HTTP response code: $RESPONSE"
-          # 200 (成功读取) 或 206 (部分数据) 均代表数据库真实响应并重置休眠计时
-          if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 206 ]; then
-            echo "✅ Supabase is alive and activity timer is reset!"
-          else
-            echo "⚠️ Unexpected status code: $RESPONSE"
+          set -u
+          base="https://eqgrtoeivuykemfferwb.supabase.co/rest/v1"
+          ok=0
+          # 试剂查询是目前已确认能打到数据库的请求。一轮打三次，避免只记成一次空读。
+          # 另外两张表如果匿名角色读不了，只记录状态，不让整次保活失败。
+          paths=(
+            "reagents?select=id&limit=1"
+            "reagents?select=id,name&limit=1"
+            "reagents?select=id&limit=1&order=id.asc"
+            "stock_records?select=id&limit=1"
+            "purchase_orders?select=id&limit=1"
+          )
+          for path in "${paths[@]}"; do
+            body=$(mktemp)
+            code=$(curl -sS -w "%{http_code}" -o "$body" -X GET \
+              "$base/$path" \
+              -H "apikey: ${SUPABASE_ANON_KEY}" \
+              -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+              -H "Accept: application/json" || true)
+            echo "$path -> ${code}"
+            if [ "$code" = "200" ] || [ "$code" = "206" ]; then
+              ok=$((ok + 1))
+            else
+              echo "body: $(head -c 200 "$body")"
+            fi
+            rm -f "$body"
+          done
+          echo "successful database reads: $ok"
+          if [ "$ok" -lt 1 ]; then
+            echo "no database read succeeded"
             exit 1
           fi
